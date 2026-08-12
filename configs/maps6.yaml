@@ -1,0 +1,23 @@
+device:
+  app_id: MAPS6
+  version: 8.0.0
+serial:
+  port: /dev/ttyS0
+  fallback: /dev/ttyAMA0
+  baud_rate: 115200
+sensor:
+  poll_interval: 10
+modules:
+  wifi: true
+  lass: true
+  mqtt: true
+  oled: true
+  storage_local: true
+  storage_ext: true
+  ota: true
+  lte: false
+  gps: false
+ota:
+  server_url: ""
+  check_interval: 86400
+  auto_update: false

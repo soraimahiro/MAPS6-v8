@@ -1,0 +1,16 @@
+[Unit]
+Description=MAPS 8.0 Air Quality Monitor Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/pi/maps6/maps6d -config /home/pi/maps6/maps6.yaml
+WorkingDirectory=/home/pi/maps6
+Restart=always
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
