@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"maps6/internal/ipc"
+	"maps6/internal/tui"
 )
 
 func printData(data json.RawMessage) {
@@ -30,7 +31,13 @@ func main() {
 	cmd := os.Args[1]
 
 	if cmd == "tui" {
-		fmt.Println("TUI not yet implemented")
+		client, err := ipc.Connect()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Cannot connect to maps6d: %v\n", err)
+			os.Exit(1)
+		}
+		defer client.Close()
+		tui.Run(client)
 		return
 	}
 

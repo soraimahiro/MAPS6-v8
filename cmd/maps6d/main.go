@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,8 +16,11 @@ import (
 	"maps6/internal/ipc"
 	"maps6/internal/mcu"
 	"maps6/internal/module"
+	"maps6/internal/network"
 	"maps6/internal/ota"
 	"maps6/internal/serial"
+	"maps6/internal/storage"
+	"maps6/internal/upload"
 )
 
 var Version = "dev"
@@ -54,7 +58,8 @@ func getDeviceID() string {
 	}
 	for _, i := range interfaces {
 		if i.Name == "wlan0" || i.Name == "eth0" {
-			return i.HardwareAddr.String()
+			mac := i.HardwareAddr.String()
+			return strings.ToUpper(strings.ReplaceAll(mac, ":", ""))
 		}
 	}
 	return "unknown"
@@ -106,12 +111,14 @@ func main() {
 
 	otaUpdater := ota.NewUpdater(&cfg.OTA, Version)
 	
-	registry.Register("wifi", NewStubModule("wifi"))
-	registry.Register("lass", NewStubModule("lass"))
-	registry.Register("mqtt", NewStubModule("mqtt"))
+	netMgr := network.NewManager(cfg)
+
+	registry.Register("wifi", netMgr)
+	registry.Register("lass", upload.NewLASSModule(cfg, sensorBus, deviceID, netMgr))
+	registry.Register("mqtt", upload.NewMQTTModule(cfg, sensorBus, deviceID, netMgr.IsConnected))
 	registry.Register("oled", NewStubModule("oled"))
-	registry.Register("storage_local", NewStubModule("storage_local"))
-	registry.Register("storage_ext", NewStubModule("storage_ext"))
+	registry.Register("storage_local", storage.NewLocalModule(cfg, sensorBus, deviceID))
+	registry.Register("storage_ext", storage.NewExternalModule(cfg, sensorBus, deviceID))
 	registry.Register("ota", otaUpdater)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -120,7 +127,8 @@ func main() {
 	registry.StartEnabled(ctx)
 
 	networkStateFn := func() (string, string, string) {
-		return "unknown", "0.0.0.0", "none"
+		state, ip, ssid := netMgr.GetState()
+		return state.String(), ip, ssid
 	}
 
 	ipcServer := ipc.NewServer(sensorBus, registry, mega, networkStateFn, otaUpdater, deviceID, Version, cfg)
@@ -130,7 +138,7 @@ func main() {
 
 	pollInterval := 10 * time.Second
 	if cfg.Sensor.PollInterval > 0 {
-		pollInterval = time.Duration(cfg.Sensor.PollInterval) * time.Second
+		pollInterval = time.Duration(cfg.Sensor.PollInterval)
 	}
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
