@@ -62,6 +62,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to listen on socket %s: %w", SocketPath, err)
 	}
 	s.listener = l
+	_ = os.Chmod(SocketPath, 0666) // Allow non-root users (like 'pi') to connect without sudo
 	s.logger.Info("IPC server listening", "socket", SocketPath)
 
 	go func() {
