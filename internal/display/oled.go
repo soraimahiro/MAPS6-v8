@@ -2,137 +2,231 @@ package display
 
 import (
 	"fmt"
-	"image"
 	"image/color"
-	"image/draw"
+	"log/slog"
 	"os"
+	"syscall"
 	"time"
 
-	"github.com/golang/freetype/truetype"
-	"golang.org/x/image/font"
-	"golang.org/x/image/math/fixed"
-	"periph.io/x/conn/v3/i2c/i2creg"
-	"periph.io/x/devices/v3/ssd1306"
-	"periph.io/x/host/v3"
+	"tinygo.org/x/tinyfont"
+	"tinygo.org/x/tinyfont/proggy"
 
 	"maps6/internal/mcu"
 )
 
+const (
+	OLEDWidth  = 128
+	OLEDHeight = 64
+	I2CSlave   = 0x0703
+	SSD1306Addr = 0x3C
+)
+
+// OLEDDisplay represents an SSD1306 OLED display using native I2C or fallback.
 type OLEDDisplay struct {
-	dev    *ssd1306.Dev
-	font9  font.Face
-	font14 font.Face
-	buf    *image.Gray
-	width  int
-	height int
+	file   *os.File
+	buf    [1024]byte // 128 x 64 / 8 bytes
+	logger *slog.Logger
 }
 
+// Size implements tinyfont.Displayer
+func (d *OLEDDisplay) Size() (x, y int16) {
+	return OLEDWidth, OLEDHeight
+}
+
+// SetPixel implements tinyfont.Displayer
+func (d *OLEDDisplay) SetPixel(x, y int16, c color.RGBA) {
+	if x < 0 || x >= OLEDWidth || y < 0 || y >= OLEDHeight {
+		return
+	}
+	idx := int(x) + int(y/8)*OLEDWidth
+	if c.R > 64 || c.G > 64 || c.B > 64 || c.A > 64 {
+		d.buf[idx] |= (1 << (y % 8))
+	} else {
+		d.buf[idx] &= ^(1 << (y % 8))
+	}
+}
+
+// Display implements tinyfont.Displayer
+func (d *OLEDDisplay) Display() error {
+	return d.Flush()
+}
+
+// NewOLEDDisplay initializes SSD1306 over /dev/i2c-1 (or /dev/i2c-0).
 func NewOLEDDisplay(fontPath string) (*OLEDDisplay, error) {
-	if _, err := host.Init(); err != nil {
-		return nil, fmt.Errorf("failed to initialize periph host: %w", err)
+	logger := slog.Default().With("component", "oled")
+
+	// Try opening Linux I2C device (/dev/i2c-1 is standard on Raspberry Pi)
+	busPaths := []string{"/dev/i2c-1", "/dev/i2c-0"}
+	var f *os.File
+	var openErr error
+
+	for _, p := range busPaths {
+		f, openErr = os.OpenFile(p, os.O_RDWR, 0600)
+		if openErr == nil {
+			logger.Info("Opened I2C device", "path", p)
+			break
+		}
 	}
 
-	// Try default I2C bus (on Raspberry Pi typically /dev/i2c-1)
-	b, err := i2creg.Open("")
-	if err != nil {
-		return nil, fmt.Errorf("failed to open I2C bus: %w", err)
+	if f == nil {
+		return nil, fmt.Errorf("cannot open I2C bus: %w", openErr)
 	}
 
-	dev, err := ssd1306.NewI2C(b, &ssd1306.DefaultOpts)
-	if err != nil {
-		b.Close()
-		return nil, fmt.Errorf("failed to initialize ssd1306 on I2C: %w", err)
+	// Set I2C slave address 0x3C
+	if err := ioctl(f.Fd(), I2CSlave, uintptr(SSD1306Addr)); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("failed to set I2C slave address 0x3C: %w", err)
 	}
-
-	var fontBytes []byte
-	if fontPath != "" {
-		fontBytes, _ = os.ReadFile(fontPath)
-	}
-	if len(fontBytes) == 0 {
-		fontBytes = defaultFontBytes
-	}
-
-	if len(fontBytes) == 0 {
-		return nil, fmt.Errorf("no font available (both file and embedded font are empty)")
-	}
-
-	ttf, err := truetype.Parse(fontBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse font: %w", err)
-	}
-
-	font9 := truetype.NewFace(ttf, &truetype.Options{Size: 9, DPI: 72})
-	font14 := truetype.NewFace(ttf, &truetype.Options{Size: 14, DPI: 72})
 
 	disp := &OLEDDisplay{
-		dev:    dev,
-		font9:  font9,
-		font14: font14,
-		buf:    image.NewGray(image.Rect(0, 0, 128, 64)),
-		width:  128,
-		height: 64,
+		file:   f,
+		logger: logger,
 	}
+
+	// Initialize SSD1306 hardware
+	if err := disp.initSSD1306(); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("failed to init SSD1306 hardware: %w", err)
+	}
+
 	disp.Clear()
 	_ = disp.Flush()
+	logger.Info("SSD1306 OLED initialized successfully with tinyfont proggy")
 
 	return disp, nil
 }
 
-func (d *OLEDDisplay) Clear() {
-	draw.Draw(d.buf, d.buf.Bounds(), image.NewUniform(color.Black), image.Point{}, draw.Src)
-}
-
-func (d *OLEDDisplay) DrawText(x, y int, text string, face font.Face) {
-	drawer := &font.Drawer{
-		Dst:  d.buf,
-		Src:  image.NewUniform(color.White),
-		Face: face,
-		Dot:  fixed.P(x, y<<6),
+func ioctl(fd, cmd, arg uintptr) error {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, cmd, arg)
+	if errno != 0 {
+		return errno
 	}
-	drawer.DrawString(text)
-}
-
-func (d *OLEDDisplay) Flush() error {
-	if d.dev == nil {
-		return nil
-	}
-	return d.dev.Draw(d.buf.Bounds(), d.buf, image.Point{})
-}
-
-func (d *OLEDDisplay) Close() error {
 	return nil
 }
 
-// RenderStatus renders the default 7-line air quality monitoring layout matching system specification
+func (d *OLEDDisplay) writeCommand(cmd byte) error {
+	packet := []byte{0x00, cmd} // Co = 0, D/C# = 0
+	_, err := d.file.Write(packet)
+	return err
+}
+
+func (d *OLEDDisplay) writeCommands(cmds ...byte) error {
+	packet := make([]byte, len(cmds)+1)
+	packet[0] = 0x00
+	copy(packet[1:], cmds)
+	_, err := d.file.Write(packet)
+	return err
+}
+
+func (d *OLEDDisplay) initSSD1306() error {
+	// Standard SSD1306 128x64 initialization sequence
+	cmds := []byte{
+		0xAE,       // Display off
+		0xD5, 0x80, // Set display clock divide ratio / oscillator frequency
+		0xA8, 0x3F, // Set multiplex ratio: 64 lines (0x3F)
+		0xD3, 0x00, // Set display offset = 0
+		0x40,       // Set start line = 0
+		0x8D, 0x14, // Enable charge pump regulator
+		0x20, 0x00, // Set Memory Addressing Mode: Horizontal
+		0xA1,       // Set Segment Re-map (column 127 mapped to SEG0)
+		0xC8,       // Set COM Output Scan Direction (remapped)
+		0xDA, 0x12, // Set COM Pins Hardware Config: alternative, disable left/right remap
+		0x81, 0xCF, // Set Contrast Control: 0xCF
+		0xD9, 0xF1, // Set Pre-charge Period
+		0xDB, 0x40, // Set VCOMH Deselect Level
+		0xA4,       // Entire Display ON (output follows RAM content)
+		0xA6,       // Set Normal (non-inverted) Display
+		0xAF,       // Turn Display ON
+	}
+	return d.writeCommands(cmds...)
+}
+
+// Clear clears the display buffer
+func (d *OLEDDisplay) Clear() {
+	for i := range d.buf {
+		d.buf[i] = 0
+	}
+}
+
+// Flush sends the 1024-byte buffer to the SSD1306 display
+func (d *OLEDDisplay) Flush() error {
+	if d.file == nil {
+		return nil
+	}
+
+	// Set column and page address to full range (128 columns, 8 pages)
+	_ = d.writeCommands(
+		0x21, 0x00, 0x7F, // Column address: 0 to 127
+		0x22, 0x00, 0x07, // Page address: 0 to 7
+	)
+
+	// Write buffer in chunks (Data mode: prefix byte 0x40)
+	chunkSize := 64
+	dataPacket := make([]byte, chunkSize+1)
+	dataPacket[0] = 0x40 // Co = 0, D/C# = 1 (Data)
+
+	for i := 0; i < len(d.buf); i += chunkSize {
+		end := i + chunkSize
+		if end > len(d.buf) {
+			end = len(d.buf)
+		}
+		packetLen := (end - i) + 1
+		copy(dataPacket[1:packetLen], d.buf[i:end])
+		if _, err := d.file.Write(dataPacket[:packetLen]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Close closes the I2C file descriptor
+func (d *OLEDDisplay) Close() error {
+	if d.file != nil {
+		_ = d.writeCommand(0xAE) // Display off
+		err := d.file.Close()
+		d.file = nil
+		return err
+	}
+	return nil
+}
+
+// RenderStatus renders the 7-line layout using tinyfont proggy
 func (d *OLEDDisplay) RenderStatus(deviceID string, data mcu.SensorData, netState, ip, version, csq string) {
 	d.Clear()
+	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
 
-	now := time.Now().UTC()
-	dateStr := now.Format("2006-01-02 15:04:05")
+	curY := int16(7)
 
-	// Line 1: ID: B827EB52FDBC (14pt)
-	d.DrawText(0, 14, fmt.Sprintf("ID: %s", deviceID), d.font14)
+	// Line 1: ID
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY+1, fmt.Sprintf("ID:%s", deviceID), white)
+	curY += 9
 
-	// Line 2: Date: 2026-08-26 15:00:00 (9pt)
-	d.DrawText(0, 24, fmt.Sprintf("Date: %s", dateStr), d.font9)
+	// Line 2: Date
+	nowStr := time.Now().Format("2006-01-02 15:04:05")
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, fmt.Sprintf("Date:%s", nowStr), white)
+	curY += 9
 
-	// Line 3: Temp: 25.5 / RH: 60.0 (9pt)
-	d.DrawText(0, 34, fmt.Sprintf("Temp: %.1f / RH: %.1f", data.Temp, data.Humi), d.font9)
+	// Line 3: Temp & RH
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, fmt.Sprintf("Temp:%.1f / RH:%.1f", data.Temp, data.Humi), white)
+	curY += 9
 
-	// Line 4: PM2.5: 15 ug/m3 (9pt)
-	d.DrawText(0, 44, fmt.Sprintf("PM2.5: %d ug/m3", data.PM25_AE), d.font9)
+	// Line 4: PM2.5
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, fmt.Sprintf("PM2.5:%dug/m3", data.PM25_AE), white)
+	curY += 9
 
-	// Line 5: TVOC: 120 ppb (9pt)
-	d.DrawText(0, 54, fmt.Sprintf("TVOC: %d ppb", data.TVOC), d.font9)
+	// Line 5: TVOC
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, fmt.Sprintf("TVOC:%dppb", data.TVOC), white)
+	curY += 9
 
-	// Line 6: CO2: 450 ppm (9pt)
+	// Line 6: CO2
 	co2Str := fmt.Sprintf("%d", data.CO2)
 	if data.CO2 < 0 {
 		co2Str = "Init"
 	}
-	d.DrawText(0, 64, fmt.Sprintf("CO2: %s ppm", co2Str), d.font9)
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, fmt.Sprintf("CO2:%sppm", co2Str), white)
 
-	// Line 7 Right Bottom: Network status and version
+	// Line 7 Right Bottom: CSQ, Version, Network Icon
 	netIcon := "-"
 	if netState == "wifi" || netState == "WiFi" || netState == "1" {
 		netIcon = "W"
@@ -143,41 +237,53 @@ func (d *OLEDDisplay) RenderStatus(deviceID string, data mcu.SensorData, netStat
 	if csq == "" {
 		csq = "-"
 	}
-	d.DrawText(75, 54, fmt.Sprintf("csq: %s", csq), d.font9)
-	d.DrawText(75, 64, fmt.Sprintf("V%s %s", version, netIcon), d.font9)
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 80, 43, fmt.Sprintf("csq: %s", csq), white)
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 80, 52, fmt.Sprintf("V%s", version), white)
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 112, 52, netIcon, white)
 
 	_ = d.Flush()
 }
 
+// RenderMenu renders the interactive menu
 func (d *OLEDDisplay) RenderMenu(title string, items []string, cursor int) {
 	d.Clear()
-	d.DrawText(0, 14, title, d.font14)
-	y := 24
+	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, 8, title, white)
+	curY := int16(18)
+
 	for i, item := range items {
 		prefix := "  "
 		if i == cursor {
 			prefix = "> "
 		}
-		d.DrawText(0, y, prefix+item, d.font9)
-		y += 10
+		tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, prefix+item, white)
+		curY += 9
 	}
 	_ = d.Flush()
 }
 
+// RenderText renders multiple lines of text
 func (d *OLEDDisplay) RenderText(title string, lines []string) {
 	d.Clear()
-	d.DrawText(0, 14, title, d.font14)
-	y := 24
+	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, 8, title, white)
+	curY := int16(18)
+
 	for _, line := range lines {
-		d.DrawText(0, y, line, d.font9)
-		y += 10
+		tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, line, white)
+		curY += 9
 	}
 	_ = d.Flush()
 }
 
+// RenderConfirm renders confirmation dialog
 func (d *OLEDDisplay) RenderConfirm(message string) {
 	d.Clear()
-	d.DrawText(0, 24, message, d.font9)
-	d.DrawText(0, 44, "Enter=Yes Esc=No", d.font9)
+	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, 20, message, white)
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, 40, "Enter=Yes Esc=No", white)
 	_ = d.Flush()
 }

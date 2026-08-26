@@ -6,13 +6,9 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0
 	go.bug.st/serial v1.8.0
-	golang.org/x/image v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
-	periph.io/x/conn/v3 v3.7.3
-	periph.io/x/devices/v3 v3.7.4
-	periph.io/x/host/v3 v3.8.5
+	tinygo.org/x/tinyfont v0.7.0
 )
 
 require (
@@ -22,6 +18,7 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -36,4 +33,5 @@ require (
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
+	tinygo.org/x/drivers v0.31.0 // indirect
 )
