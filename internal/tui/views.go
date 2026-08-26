@@ -23,7 +23,7 @@ func renderMainView(m Model) string {
 	sensors := fmt.Sprintf("Temp: %.1f°C   Humi: %.1f%%\nCO2: %d ppm   TVOC: %d ppb\nPM2.5: %d µg/m³  Lux: %d",
 		m.sensorData.Temp, m.sensorData.Humi, m.sensorData.CO2, m.sensorData.TVOC, m.sensorData.PM25_AE, m.sensorData.Illuminance)
 
-	menu := "[1] Sensor Data    [4] Maintenance\n[2] Module Control [5] System Info\n[3] WiFi Setup     [6] OTA Update\n                   [q] Quit"
+	menu := "[1] Sensor Detail  [4] Maintenance\n[2] Module Control [5] System Info\n[3] WiFi Setup     [6] OTA Update\n                   [q] Quit"
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render(header),
@@ -91,11 +91,48 @@ func renderModuleView(m Model) string {
 	return boxStyle.Render(sb.String())
 }
 
+func renderWiFiView(m Model) string {
+	sb := strings.Builder{}
+	sb.WriteString(titleStyle.Render("WiFi Setup View") + "\n\n")
+
+	sb.WriteString(fmt.Sprintf("Current: %s (IP: %s, SSID: %s)\n\n", m.systemInfo.NetworkState, m.systemInfo.IP, m.systemInfo.SSID))
+
+	if m.scanningWiFi {
+		sb.WriteString("Scanning available WiFi networks...\n")
+	} else if len(m.wifiNetworks) == 0 {
+		sb.WriteString("No networks found or wireless interface unavailable.\nPress 'r' to rescan.\n")
+	} else {
+		sb.WriteString("Available Networks:\n")
+		for i, net := range m.wifiNetworks {
+			cursor := " "
+			style := lipgloss.NewStyle()
+			if i == m.selectedIdx {
+				cursor = ">"
+				style = selStyle
+			}
+
+			sec := "Open"
+			if net.Security != "" && net.Security != "--" {
+				sec = "Secured"
+			}
+			line := fmt.Sprintf("%s %-20s (Signal: %d%%, %s)", cursor, net.SSID, net.Signal, sec)
+			sb.WriteString(style.Render(line) + "\n")
+		}
+	}
+
+	if m.statusMsg != "" {
+		sb.WriteString("\n" + warnStyle.Render(m.statusMsg) + "\n")
+	}
+
+	sb.WriteString("\nPress 'r' to rescan\nTo connect from CLI: maps6ctl wifi connect <SSID> <PASSWORD>\nPress [esc] to return")
+	return boxStyle.Render(sb.String())
+}
+
 func renderMaintenanceView(m Model) string {
 	sb := strings.Builder{}
 	sb.WriteString(titleStyle.Render("Maintenance View") + "\n\n")
 
-	items := []string{"Trigger CO2 Calibration", "Trigger PMS Reset"}
+	items := []string{"Trigger CO2 Calibration (400ppm)", "Trigger PMS Reset"}
 	for i, item := range items {
 		cursor := " "
 		style := lipgloss.NewStyle()

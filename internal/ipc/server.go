@@ -13,6 +13,7 @@ import (
 	"maps6/internal/config"
 	"maps6/internal/mcu"
 	"maps6/internal/module"
+	"maps6/internal/network"
 	"maps6/internal/ota"
 )
 
@@ -161,6 +162,23 @@ func (s *Server) dispatch(req Request) Response {
 			Modules:      modulesMap,
 		}
 		return NewSuccessResponse(info)
+
+	case MethodGetWiFiNetworks:
+		networks, err := network.ScanWiFi()
+		if err != nil {
+			return NewErrorResponse(err.Error())
+		}
+		return NewSuccessResponse(networks)
+
+	case MethodConnectWiFi:
+		var params ConnectWiFiParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return NewErrorResponse("invalid params format")
+		}
+		if err := network.ConnectWiFi(params.SSID, params.Password); err != nil {
+			return NewErrorResponse(err.Error())
+		}
+		return NewSuccessResponse("connected")
 
 	case MethodTriggerCO2Cal:
 		if err := s.mega.SetCO2Calibration(); err != nil {

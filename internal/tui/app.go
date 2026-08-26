@@ -10,20 +10,34 @@ import (
 	"maps6/internal/ipc"
 	"maps6/internal/mcu"
 	"maps6/internal/module"
+	"maps6/internal/network"
 	"maps6/internal/ota"
 )
 
+const (
+	ViewMain = iota
+	ViewSensor
+	ViewModules
+	ViewWiFi
+	ViewMaintenance
+	ViewSysInfo
+	ViewOTA
+)
+
 type tickMsg time.Time
+type wifiScanMsg []network.WiFiNetwork
 
 type Model struct {
 	ipcClient     *ipc.Client
-	currentView   int // 0=main, 1=sensor, 2=modules, 3=maintenance, 4=sysinfo, 5=ota
+	currentView   int
 	sensorData    mcu.SensorData
 	moduleStatus  []module.ModuleStatus
 	systemInfo    ipc.SystemInfo
 	otaUpdateInfo *ota.UpdateInfo
+	wifiNetworks  []network.WiFiNetwork
 	selectedIdx   int
 	statusMsg     string
+	scanningWiFi  bool
 	err           error
 	width         int
 	height        int
@@ -38,17 +52,26 @@ func NewModel(client *ipc.Client) Model {
 }
 
 func (m *Model) fetchData() {
-	// fetch system info
 	if resp, err := m.ipcClient.Call(ipc.MethodGetSystemInfo, nil); err == nil && resp.Success {
 		json.Unmarshal(resp.Data, &m.systemInfo)
 	}
-	// fetch sensor data
 	if resp, err := m.ipcClient.Call(ipc.MethodGetSensorData, nil); err == nil && resp.Success {
 		json.Unmarshal(resp.Data, &m.sensorData)
 	}
-	// fetch module status
 	if resp, err := m.ipcClient.Call(ipc.MethodGetModuleStatus, nil); err == nil && resp.Success {
 		json.Unmarshal(resp.Data, &m.moduleStatus)
+	}
+}
+
+func (m Model) scanWiFiCmd() tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.ipcClient.Call(ipc.MethodGetWiFiNetworks, nil)
+		if err != nil || !resp.Success {
+			return wifiScanMsg(nil)
+		}
+		var nets []network.WiFiNetwork
+		_ = json.Unmarshal(resp.Data, &nets)
+		return wifiScanMsg(nets)
 	}
 }
 
@@ -64,49 +87,70 @@ func tickCmd() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case wifiScanMsg:
+		m.scanningWiFi = false
+		m.wifiNetworks = []network.WiFiNetwork(msg)
+		if len(m.wifiNetworks) == 0 {
+			m.statusMsg = "No WiFi networks found (or scan error)"
+		} else {
+			m.statusMsg = fmt.Sprintf("Found %d networks", len(m.wifiNetworks))
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "1":
-			m.currentView = 1
+			m.currentView = ViewSensor
 			m.selectedIdx = 0
 			m.statusMsg = ""
 		case "2":
-			m.currentView = 2
+			m.currentView = ViewModules
 			m.selectedIdx = 0
 			m.statusMsg = ""
 		case "3":
-			// WiFi setup
-			m.currentView = 0 
+			m.currentView = ViewWiFi
+			m.selectedIdx = 0
+			m.scanningWiFi = true
+			m.statusMsg = "Scanning WiFi networks..."
+			return m, m.scanWiFiCmd()
 		case "4":
-			m.currentView = 3
+			m.currentView = ViewMaintenance
 			m.selectedIdx = 0
 			m.statusMsg = ""
 		case "5":
-			m.currentView = 4
+			m.currentView = ViewSysInfo
 			m.selectedIdx = 0
 			m.statusMsg = ""
 		case "6":
-			m.currentView = 5
+			m.currentView = ViewOTA
 			m.selectedIdx = 0
 			m.statusMsg = ""
 		case "esc":
-			m.currentView = 0
+			m.currentView = ViewMain
 			m.selectedIdx = 0
 			m.statusMsg = ""
+		case "r":
+			if m.currentView == ViewWiFi {
+				m.scanningWiFi = true
+				m.statusMsg = "Scanning WiFi networks..."
+				return m, m.scanWiFiCmd()
+			}
 		case "up", "k":
 			if m.selectedIdx > 0 {
 				m.selectedIdx--
 			}
 		case "down", "j":
-			if m.currentView == 2 && m.selectedIdx < len(m.moduleStatus)-1 {
+			if m.currentView == ViewModules && m.selectedIdx < len(m.moduleStatus)-1 {
 				m.selectedIdx++
-			} else if m.currentView == 3 && m.selectedIdx < 1 {
+			} else if m.currentView == ViewWiFi && m.selectedIdx < len(m.wifiNetworks)-1 {
+				m.selectedIdx++
+			} else if m.currentView == ViewMaintenance && m.selectedIdx < 1 {
 				m.selectedIdx++
 			}
 		case "enter":
-			if m.currentView == 2 {
+			if m.currentView == ViewModules {
 				// toggle module
 				if m.selectedIdx >= 0 && m.selectedIdx < len(m.moduleStatus) {
 					mod := m.moduleStatus[m.selectedIdx]
@@ -116,11 +160,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					})
 					m.fetchData()
 				}
-			} else if m.currentView == 3 {
+			} else if m.currentView == ViewMaintenance {
 				// maintenance
 				if m.selectedIdx == 0 {
 					if resp, err := m.ipcClient.Call(ipc.MethodTriggerCO2Cal, nil); err == nil && resp.Success {
-						m.statusMsg = "CO2 Calibration Triggered"
+						m.statusMsg = "CO2 Calibration Triggered (400ppm)"
 					} else {
 						m.statusMsg = "Failed to trigger CO2 Calibration"
 					}
@@ -131,7 +175,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.statusMsg = "Failed to trigger PMS Reset"
 					}
 				}
-			} else if m.currentView == 5 {
+			} else if m.currentView == ViewOTA {
 				// OTA check
 				m.statusMsg = "Checking for updates..."
 				if resp, err := m.ipcClient.Call(ipc.MethodTriggerOTACheck, nil); err == nil && resp.Success {
@@ -153,7 +197,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "u":
-			if m.currentView == 5 && m.otaUpdateInfo != nil && m.otaUpdateInfo.Available {
+			if m.currentView == ViewOTA && m.otaUpdateInfo != nil && m.otaUpdateInfo.Available {
 				m.statusMsg = "Applying update..."
 				m.ipcClient.Call(ipc.MethodTriggerOTAUpdate, nil)
 				m.statusMsg = "Update triggered."
@@ -171,15 +215,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) View() string {
 	switch m.currentView {
-	case 1:
+	case ViewSensor:
 		return renderSensorView(m)
-	case 2:
+	case ViewModules:
 		return renderModuleView(m)
-	case 3:
+	case ViewWiFi:
+		return renderWiFiView(m)
+	case ViewMaintenance:
 		return renderMaintenanceView(m)
-	case 4:
+	case ViewSysInfo:
 		return renderSystemInfoView(m)
-	case 5:
+	case ViewOTA:
 		return renderOTAView(m)
 	default:
 		return renderMainView(m)
