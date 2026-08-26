@@ -23,8 +23,6 @@ release: clean test
 	cp configs/maps6.yaml release/$(RELEASE)/
 	cp configs/maps6d.service release/$(RELEASE)/
 	cp scripts/install.sh release/$(RELEASE)/
-	mkdir -p release/$(RELEASE)/fonts
-	cp fonts/NotoSans-Regular.ttf release/$(RELEASE)/fonts/
 	chmod +x release/$(RELEASE)/install.sh
 	cd release && tar czf $(RELEASE).tar.gz $(RELEASE)/
 	@echo "Release: release/$(RELEASE).tar.gz"

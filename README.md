@@ -124,8 +124,6 @@ system_v8/
 ├── configs/
 │   ├── maps6.yaml               # Default configuration
 │   └── maps6d.service           # systemd unit file
-├── fonts/
-│   └── NotoSans-Regular.ttf     # OLED display font (614 KB)
 ├── scripts/
 │   └── install.sh               # Raspberry Pi installer
 ├── Makefile                     # Build / test / release
@@ -195,9 +193,7 @@ maps6-8.0.0-arm/
 ├── maps6ctl            # ARM CLI tool binary
 ├── maps6.yaml          # Default config
 ├── maps6d.service      # systemd unit
-├── install.sh          # Installation script
-└── fonts/
-    └── NotoSans-Regular.ttf
+└── install.sh          # Installation script
 ```
 
 ### Stage 2: Install on Raspberry Pi
@@ -408,11 +404,8 @@ B827EB52FDBC,2026-08-23,00:05:00,25.50,60.00,15,8,22,350,450,120,0.000000,0.0000
 | `go.bug.st/serial` | Serial port communication |
 | `gopkg.in/yaml.v3` | YAML config parsing |
 | `github.com/eclipse/paho.mqtt.golang` | MQTT client |
-| `periph.io/x/conn/v3` | I2C hardware interface |
-| `periph.io/x/devices/v3` | SSD1306 OLED driver |
-| `periph.io/x/host/v3` | Hardware host init |
-| `github.com/golang/freetype` | TrueType font rendering |
-| `golang.org/x/image` | Image/font processing |
+| `tinygo.org/x/tinyfont` | Embedded bitmap font rendering |
+| `tinygo.org/x/tinyfont/proggy` | Pixel-perfect Proggy font for OLED |
 | `github.com/charmbracelet/bubbletea` | Terminal UI framework |
 | `github.com/charmbracelet/lipgloss` | Terminal UI styling |
 

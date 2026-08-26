@@ -11,7 +11,6 @@ systemctl stop maps6d || true
 
 echo "Creating directories..."
 mkdir -p /home/pi/maps6/data
-mkdir -p /home/pi/maps6/fonts
 
 echo "Copying binaries..."
 cp maps6d maps6ctl /home/pi/maps6/
@@ -27,11 +26,6 @@ if [ ! -f /home/pi/maps6/maps6.yaml ]; then
 else
   cp maps6.yaml /home/pi/maps6/maps6.yaml.new
   echo "Existing config kept. New config saved as maps6.yaml.new"
-fi
-
-if [ -f fonts/NotoSans-Regular.ttf ]; then
-  echo "Copying fonts..."
-  cp fonts/NotoSans-Regular.ttf /home/pi/maps6/fonts/
 fi
 
 echo "Installing systemd service..."
