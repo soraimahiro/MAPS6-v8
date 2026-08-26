@@ -99,41 +99,47 @@ func (s *Server) Stop() {
 func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	var req Request
-	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		s.logger.Error("Failed to decode request", "err", err)
-		return
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	for {
+		var req Request
+		if err := decoder.Decode(&req); err != nil {
+			return // Connection closed by client
+		}
+
+		resp := s.dispatch(req)
+		if err := encoder.Encode(resp); err != nil {
+			return
+		}
 	}
+}
 
-	var resp Response
-
+func (s *Server) dispatch(req Request) Response {
 	switch req.Method {
 	case MethodGetSensorData:
 		latest := s.bus.Latest()
-		resp = NewSuccessResponse(latest)
+		return NewSuccessResponse(latest)
+
 	case MethodGetModuleStatus:
-		resp = NewSuccessResponse(s.registry.StatusAll())
+		return NewSuccessResponse(s.registry.StatusAll())
+
 	case MethodSetModuleEnabled:
 		var params SetModuleEnabledParams
 		if err := json.Unmarshal(req.Params, &params); err != nil {
-			resp = NewErrorResponse("invalid params format")
-			break
+			return NewErrorResponse("invalid params format")
 		}
 		if params.Enabled {
-			err := s.registry.Enable(params.Name)
-			if err != nil {
-				resp = NewErrorResponse(err.Error())
-			} else {
-				resp = NewSuccessResponse(nil)
+			if err := s.registry.Enable(params.Name); err != nil {
+				return NewErrorResponse(err.Error())
 			}
 		} else {
-			err := s.registry.Disable(params.Name)
-			if err != nil {
-				resp = NewErrorResponse(err.Error())
-			} else {
-				resp = NewSuccessResponse(nil)
+			if err := s.registry.Disable(params.Name); err != nil {
+				return NewErrorResponse(err.Error())
 			}
 		}
+		return NewSuccessResponse(nil)
+
 	case MethodGetSystemInfo:
 		mcuFirmware, _ := s.mega.GetFirmwareVersion()
 		netType, ip, ssid := "", "", ""
@@ -154,45 +160,41 @@ func (s *Server) handleConnection(conn net.Conn) {
 			SSID:         ssid,
 			Modules:      modulesMap,
 		}
-		resp = NewSuccessResponse(info)
+		return NewSuccessResponse(info)
+
 	case MethodTriggerCO2Cal:
-		err := s.mega.SetCO2Calibration()
-		if err != nil {
-			resp = NewErrorResponse(err.Error())
-		} else {
-			resp = NewSuccessResponse(nil)
+		if err := s.mega.SetCO2Calibration(); err != nil {
+			return NewErrorResponse(err.Error())
 		}
+		return NewSuccessResponse(nil)
+
 	case MethodTriggerPMSReset:
-		err := s.mega.SetPMSReset()
-		if err != nil {
-			resp = NewErrorResponse(err.Error())
-		} else {
-			resp = NewSuccessResponse(nil)
+		if err := s.mega.SetPMSReset(); err != nil {
+			return NewErrorResponse(err.Error())
 		}
+		return NewSuccessResponse(nil)
+
 	case MethodTriggerOTACheck:
 		info, err := s.otaUpdater.CheckUpdate(s.deviceID)
 		if err != nil {
-			resp = NewErrorResponse(err.Error())
-		} else {
-			resp = NewSuccessResponse(info)
+			return NewErrorResponse(err.Error())
 		}
+		return NewSuccessResponse(info)
+
 	case MethodTriggerOTAUpdate:
 		info, err := s.otaUpdater.CheckUpdate(s.deviceID)
 		if err != nil {
-			resp = NewErrorResponse(err.Error())
-			break
+			return NewErrorResponse(err.Error())
 		}
 		if info != nil && info.Available {
 			go func() {
 				_ = s.otaUpdater.ApplyUpdate(info)
 			}()
-			resp = NewSuccessResponse("Update started")
-		} else {
-			resp = NewSuccessResponse("No update available")
+			return NewSuccessResponse("Update started")
 		}
-	default:
-		resp = NewErrorResponse("unknown method")
-	}
+		return NewSuccessResponse("No update available")
 
-	json.NewEncoder(conn).Encode(resp)
+	default:
+		return NewErrorResponse("unknown method")
+	}
 }
