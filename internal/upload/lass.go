@@ -177,11 +177,16 @@ func (m *LASSModule) Status() module.ModuleStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	var errStr string
+	if m.lastStatus != "" && m.lastStatus != "success" {
+		errStr = m.lastStatus
+	}
+
 	return module.ModuleStatus{
 		Name:      m.Name(),
 		Enabled:   true,
 		Running:   m.cancel != nil,
-		LastError: m.lastStatus,
+		LastError: errStr,
 	}
 }
 

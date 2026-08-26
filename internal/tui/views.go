@@ -81,7 +81,7 @@ func renderModuleView(m Model) string {
 
 		line := fmt.Sprintf("%s %s %-15s (%s)", cursor, state, mod.Name, running)
 		if mod.LastError != "" {
-			line += " ERR: " + mod.LastError
+			line += " " + errStyle.Render("ERR: "+mod.LastError)
 		}
 
 		sb.WriteString(style.Render(line) + "\n")

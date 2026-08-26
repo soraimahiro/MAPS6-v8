@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 
 	"maps6/internal/config"
@@ -193,13 +194,20 @@ func (r *Registry) StopAll() {
 	}
 }
 
-// StatusAll returns the status of all registered modules.
+// StatusAll returns the status of all registered modules sorted alphabetically by name.
 func (r *Registry) StatusAll() []ModuleStatus {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var statuses []ModuleStatus
-	for name, m := range r.modules {
+	names := make([]string, 0, len(r.modules))
+	for name := range r.modules {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	statuses := make([]ModuleStatus, 0, len(names))
+	for _, name := range names {
+		m := r.modules[name]
 		status := m.mod.Status()
 		status.Name = name
 		status.Enabled = m.enabled

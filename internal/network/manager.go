@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -165,15 +164,15 @@ func (m *Manager) Status() module.ModuleStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	info := fmt.Sprintf("State: %s, IP: %s", m.state.String(), m.ip)
-	if m.state == StateWiFi && m.ssid != "" {
-		info += fmt.Sprintf(", SSID: %s", m.ssid)
+	var errStr string
+	if m.state == StateNone {
+		errStr = "disconnected"
 	}
 
 	return module.ModuleStatus{
 		Name:      m.Name(),
 		Enabled:   true,
 		Running:   m.cancel != nil,
-		LastError: info,
+		LastError: errStr,
 	}
 }
