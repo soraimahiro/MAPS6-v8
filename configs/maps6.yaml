@@ -6,18 +6,18 @@ serial:
   fallback: /dev/ttyAMA0
   baud_rate: 115200
 sensor:
-  poll_interval: 10
+  poll_interval: 5s
 modules:
   wifi: true
-  lass: true
-  mqtt: true
+  lass: false
+  mqtt: false
   oled: true
   storage_local: true
-  storage_ext: true
-  ota: true
+  storage_ext: false
+  ota: false
   lte: false
   gps: false
 ota:
   server_url: ""
-  check_interval: 86400
+  check_interval: 24h
   auto_update: false

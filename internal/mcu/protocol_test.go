@@ -95,3 +95,73 @@ func TestDecodeSensorPayload_CO2Warmup(t *testing.T) {
 		t.Errorf("expected -1, got %d", sd.CO2)
 	}
 }
+
+func TestDecodeRuntimePayload(t *testing.T) {
+	// RT_DAY = 1337 (0x0539 little-endian), followed by 07:06:05
+	payload := []byte{0x39, 0x05, 7, 6, 5}
+	days, hours, mins, secs := DecodeRuntimePayload(payload)
+	if days != 1337 || hours != 7 || mins != 6 || secs != 5 {
+		t.Errorf("expected 1337/7/6/5, got %d/%d/%d/%d", days, hours, mins, secs)
+	}
+}
+
+func TestDecodeRuntimePayload_Short(t *testing.T) {
+	days, hours, mins, secs := DecodeRuntimePayload([]byte{1, 2})
+	if days != 0 || hours != 0 || mins != 0 || secs != 0 {
+		t.Errorf("expected zeros for short payload, got %d/%d/%d/%d", days, hours, mins, secs)
+	}
+}
+
+func TestDecodeErrorLogPayload(t *testing.T) {
+	payload := make([]byte, 12)
+	binary.LittleEndian.PutUint16(payload[0:2], 3)   // temp_hum
+	binary.LittleEndian.PutUint16(payload[2:4], 300) // co2
+	binary.LittleEndian.PutUint16(payload[10:12], 9) // rtc
+
+	log := DecodeErrorLogPayload(payload)
+	if len(log) != 6 {
+		t.Errorf("expected 6 counters, got %d", len(log))
+	}
+	if log["error_temp_hum"] != 3 {
+		t.Errorf("expected error_temp_hum 3, got %d", log["error_temp_hum"])
+	}
+	if log["error_co2"] != 300 {
+		t.Errorf("expected error_co2 300, got %d", log["error_co2"])
+	}
+	if log["error_tvoc"] != 0 || log["error_light"] != 0 || log["error_pms"] != 0 {
+		t.Errorf("expected zero counters, got %v", log)
+	}
+	if log["error_rtc"] != 9 {
+		t.Errorf("expected error_rtc 9, got %d", log["error_rtc"])
+	}
+}
+
+func TestDecodeErrorLogPayload_Short(t *testing.T) {
+	log := DecodeErrorLogPayload([]byte{5})
+	if log["error_temp_hum"] != 0 {
+		t.Errorf("expected zero counter for short payload, got %d", log["error_temp_hum"])
+	}
+}
+
+func TestDecodePinStatePayload(t *testing.T) {
+	payload := []byte{1, 0, 1, 0, 0, 1, 1}
+	pins := DecodePinStatePayload(payload)
+	if len(pins) != 7 {
+		t.Errorf("expected 7 pins, got %d", len(pins))
+	}
+	if !pins["pin_co2_cal"] {
+		t.Errorf("expected pin_co2_cal true")
+	}
+	if pins["pin_pms_reset"] {
+		t.Errorf("expected pin_pms_reset false")
+	}
+	if !pins["pin_pms_set"] {
+		t.Errorf("expected pin_pms_set true")
+	}
+	if pins["pin_nbiot_pwrkey"] || pins["pin_nbiot_sleep"] {
+		t.Errorf("expected nbiot pins false")
+	}
+	if !pins["pin_led_ctrl"] || !pins["pin_fan_ctrl"] {
+		t.Errorf("expected led/fan pins true")
+	}
+}

@@ -25,30 +25,30 @@ MAPS 8.0 runs on a **Raspberry Pi** equipped with a custom expansion board (Mega
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────┐
 │                  Raspberry Pi (maps6d)                       │
-│                                                             │
-│  ┌──────────┐   ┌──────────────┐   ┌───────────────────┐   │
-│  │  Serial   │──▶│  Mega2560    │──▶│    SensorBus      │   │
-│  │  Port     │   │  MCU Driver  │   │    (pub/sub)      │   │
-│  └──────────┘   └──────────────┘   └─────┬──┬──┬──┬─────┘   │
-│                                          │  │  │  │         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐│  │  │  │         │
-│  │ WiFi Mgr │  │LASS HTTP │  │  MQTT    │◀┘  │  │  │         │
-│  └──────────┘  │ Upload   │  │ Upload   │    │  │  │         │
+│                                                              │
+│  ┌───────────┐   ┌──────────────┐   ┌────────────────────┐   │
+│  │  Serial   │──▶│  Mega2560    │──▶│     SensorBus      │   │
+│  │  Port     │   │  MCU Driver  │   │     (pub/sub)      │   │
+│  └───────────┘   └──────────────┘   └─────┬──┬──┬──┬─────┘   │
+│                                           │  │  │  │         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐ │  │  │  │         │
+│  │ WiFi Mgr │  │LASS HTTP │  │   MQTT   │◀┘  │  │  │         │
+│  └──────────┘  │ Upload   │  │  Upload  │    │  │  │         │
 │                └──────────┘  └──────────┘    │  │  │         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐   │  │  │         │
-│  │Local CSV │  │Ext SD CSV│  │   OTA    │◀──┘  │  │         │
-│  │ Storage  │  │ Storage  │  │ Updater  │      │  │         │
-│  └──────────┘  └──────────┘  └──────────┘      │  │         │
-│  ┌──────────────────────────────────┐          │  │         │
-│  │  OLED Display + USB Keyboard    │◀─────────┘  │         │
-│  │  (SSD1306 128×64 + evdev)       │              │         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐    │  │  │         │
+│  │Local CSV │  │Ext SD CSV│  │   OTA    │◀───┘  │  │         │
+│  │ Storage  │  │ Storage  │  │ Updater  │       │  │         │
+│  └──────────┘  └──────────┘  └──────────┘       │  │         │
+│  ┌──────────────────────────────────┐           │  │         │
+│  │   OLED Display + USB Keyboard    │◀──────────┘  │         │
+│  │   (SSD1306 128×64 + evdev)       │              │         │
 │  └──────────────────────────────────┘              │         │
 │  ┌──────────────────────────────────┐              │         │
-│  │     IPC Server (Unix Socket)    │◀─────────────┘         │
+│  │     IPC Server (Unix Socket)     │◀─────────────┘         │
 │  └──────────────┬───────────────────┘                        │
-└─────────────────┼───────────────────────────────────────────┘
+└─────────────────┼────────────────────────────────────────────┘
                   │
          ┌────────┴────────┐
          │  maps6ctl CLI   │
@@ -328,7 +328,7 @@ serial:
   baud_rate: 115200
 
 sensor:
-  poll_interval: 10          # seconds
+  poll_interval: 5s          # seconds
 
 modules:
   wifi: true
@@ -344,33 +344,33 @@ modules:
 upload:
   lass:
     url: "https://data.lass-net.org/Upload/MAPS-secure.php"
-    interval: 300            # seconds (5 min)
-    retry_interval: 10       # seconds
+    interval: 300s           # seconds (5 min)
+    retry_interval: 10s      # seconds
   mqtt:
     broker: ""               # e.g. "mqtt.example.com"
     port: 8883
     username: ""
     password: ""
     topic_prefix: "MAPS"
-    keepalive: 270
+    keepalive: 270s
     use_tls: true
     qos: 1
 
 storage:
   local:
     path: /home/pi/maps6/data
-    interval: 60
+    interval: 60s
   external:
     path: /mnt/SD
-    interval: 60
+    interval: 60s
 
 display:
-  refresh_interval: 300      # ms
-  menu_timeout: 30           # seconds
+  refresh_interval: 300ms
+  menu_timeout: 30s          # seconds
 
 ota:
   server_url: ""             # OTA server base URL
-  check_interval: 86400      # seconds (24 h)
+  check_interval: 24h        # seconds (24 h)
   auto_update: false
 ```
 

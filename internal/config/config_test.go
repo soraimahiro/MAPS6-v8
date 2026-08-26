@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -92,6 +93,28 @@ func TestSaveConfig(t *testing.T) {
 	}
 	if loaded.Modules.LTE != true {
 		t.Errorf("expected LTE to be true")
+	}
+}
+
+func TestLoadShippedConfig(t *testing.T) {
+	path := filepath.Join("..", "..", "configs", "maps6.yaml")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Skip("shipped config not found")
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("failed to load shipped config: %v", err)
+	}
+
+	if cfg.Sensor.PollInterval != Duration(5*time.Second) {
+		t.Errorf("expected PollInterval 5s, got %v", cfg.Sensor.PollInterval)
+	}
+	if cfg.OTA.CheckInterval != Duration(24*time.Hour) {
+		t.Errorf("expected OTA CheckInterval 24h, got %v", cfg.OTA.CheckInterval)
+	}
+	if !cfg.Modules.StorageExt {
+		t.Errorf("expected storage_ext module enabled")
 	}
 }
 

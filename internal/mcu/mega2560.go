@@ -1,6 +1,7 @@
 package mcu
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -328,6 +329,19 @@ func (m *Mega2560) GetFirmwareVersion() (int, error) {
 	return int(payload[0])<<8 | int(payload[1]), nil
 }
 
+// DecodeRuntimePayload decodes the 5-byte runtime payload (DAY_L, DAY_H,
+// HOUR, MIN, SEC) where RT_DAY is a little-endian uint16.
+func DecodeRuntimePayload(payload []byte) (days, hours, mins, secs int) {
+	if len(payload) < 5 {
+		return 0, 0, 0, 0
+	}
+	days = int(binary.LittleEndian.Uint16(payload[0:2]))
+	hours = int(payload[2])
+	mins = int(payload[3])
+	secs = int(payload[4])
+	return days, hours, mins, secs
+}
+
 // GetRuntime retrieves the runtime of the MCU.
 func (m *Mega2560) GetRuntime() (days, hours, mins, secs int, err error) {
 	m.port.Lock()
@@ -344,14 +358,30 @@ func (m *Mega2560) GetRuntime() (days, hours, mins, secs int, err error) {
 		return 0, 0, 0, 0, err
 	}
 
-	payload := make([]byte, 4)
+	payload := make([]byte, 5)
 	if _, err := m.port.ReadFull(payload, 1*time.Second); err != nil {
 		return 0, 0, 0, 0, err
 	}
 	csBytes := make([]byte, 2)
 	m.port.ReadFull(csBytes, 1*time.Second)
 
-	return int(payload[0]), int(payload[1]), int(payload[2]), int(payload[3]), nil
+	days, hours, mins, secs = DecodeRuntimePayload(payload)
+	return days, hours, mins, secs, nil
+}
+
+// DecodeErrorLogPayload decodes the 12-byte error log payload into six
+// little-endian uint16 communication error counters.
+func DecodeErrorLogPayload(payload []byte) map[string]int {
+	names := [6]string{"error_temp_hum", "error_co2", "error_tvoc", "error_light", "error_pms", "error_rtc"}
+	counters := make(map[string]int, len(names))
+	for i, name := range names {
+		value := 0
+		if len(payload) >= (i+1)*2 {
+			value = int(binary.LittleEndian.Uint16(payload[i*2 : i*2+2]))
+		}
+		counters[name] = value
+	}
+	return counters
 }
 
 // GetErrorLog retrieves the error log.
@@ -370,17 +400,26 @@ func (m *Mega2560) GetErrorLog() (map[string]int, error) {
 		return nil, err
 	}
 
-	payload := make([]byte, 4)
+	payload := make([]byte, 12)
 	if _, err := m.port.ReadFull(payload, 1*time.Second); err != nil {
 		return nil, err
 	}
 	csBytes := make([]byte, 2)
 	m.port.ReadFull(csBytes, 1*time.Second)
 
-	return map[string]int{
-		"err1": int(payload[0]),
-		"err2": int(payload[1]),
-	}, nil
+	return DecodeErrorLogPayload(payload), nil
+}
+
+// DecodePinStatePayload decodes the 7-byte pin state payload into named
+// hardware pin states (CO2_CAL, PMS_RESET, PMS_SET, NBIOT_PWRKEY,
+// NBIOT_SLEEP, LED_CTRL, FAN_CTRL).
+func DecodePinStatePayload(payload []byte) map[string]bool {
+	names := [7]string{"pin_co2_cal", "pin_pms_reset", "pin_pms_set", "pin_nbiot_pwrkey", "pin_nbiot_sleep", "pin_led_ctrl", "pin_fan_ctrl"}
+	pins := make(map[string]bool, len(names))
+	for i, name := range names {
+		pins[name] = i < len(payload) && payload[i] > 0
+	}
+	return pins
 }
 
 // GetPinState retrieves the pin states.
@@ -399,14 +438,12 @@ func (m *Mega2560) GetPinState() (map[string]bool, error) {
 		return nil, err
 	}
 
-	payload := make([]byte, 2)
+	payload := make([]byte, 7)
 	if _, err := m.port.ReadFull(payload, 1*time.Second); err != nil {
 		return nil, err
 	}
 	csBytes := make([]byte, 2)
 	m.port.ReadFull(csBytes, 1*time.Second)
 
-	return map[string]bool{
-		"pin1": payload[0] > 0,
-	}, nil
+	return DecodePinStatePayload(payload), nil
 }
