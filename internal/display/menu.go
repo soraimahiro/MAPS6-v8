@@ -19,41 +19,39 @@ type MenuState int
 const (
 	StateStatus MenuState = iota
 	StateMainMenu
-	StateSensor
 	StateModules
 	StateWiFi
 	StateMaintenance
 	StateSystemInfo
-	StateOTA
 	StateConfirm
 )
 
 var mainMenuItems = []string{
-	"Sensor Data",
 	"Module Control",
-	"WiFi Setup",
+	"WiFi Status",
 	"Maintenance",
 	"System Info",
-	"OTA Update",
 }
 
 type MenuController struct {
-	oled         *OLEDDisplay
-	keyboard     *input.KeyboardReader
-	bus          *bus.SensorBus
-	registry     *module.Registry
-	networkMgr   *network.Manager
-	mega         *mcu.Mega2560
-	state        MenuState
-	cursor       int
-	timeout      time.Duration
+	oled          *OLEDDisplay
+	keyboard      *input.KeyboardReader
+	bus           *bus.SensorBus
+	registry      *module.Registry
+	networkMgr    *network.Manager
+	mega          *mcu.Mega2560
+	state         MenuState
+	cursor        int
+	moduleCursor  int
+	maintCursor   int
+	timeout       time.Duration
 	confirmAction func() error
-	deviceID     string
-	version      string
-	logger       *slog.Logger
-	running      bool
-	mu           sync.Mutex
-	done         chan struct{}
+	deviceID      string
+	version       string
+	logger        *slog.Logger
+	running       bool
+	mu            sync.Mutex
+	done          chan struct{}
 }
 
 func NewMenuController(
@@ -108,7 +106,7 @@ func (m *MenuController) run(ctx context.Context) {
 		defer m.oled.Close()
 	}
 
-	ticker := time.NewTicker(300 * time.Millisecond)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	idleTimer := time.NewTimer(m.timeout)
@@ -130,14 +128,16 @@ func (m *MenuController) run(ctx context.Context) {
 			idleTimer.Reset(m.timeout)
 			m.handleKey(ev)
 		case <-ticker.C:
+			m.mu.Lock()
 			if m.state == StateStatus {
 				m.renderStatus()
 			}
+			m.mu.Unlock()
 		case <-idleTimer.C:
 			m.mu.Lock()
 			m.state = StateStatus
-			m.mu.Unlock()
 			m.renderStatus()
+			m.mu.Unlock()
 		}
 	}
 }
@@ -148,41 +148,108 @@ func (m *MenuController) handleKey(ev input.KeyEvent) {
 
 	switch m.state {
 	case StateStatus:
+		// Any key press from home screen enters main menu
 		m.state = StateMainMenu
 		m.cursor = 0
 		m.renderMainMenu()
+
 	case StateMainMenu:
 		switch ev {
 		case input.KeyUp:
 			if m.cursor > 0 {
 				m.cursor--
+			} else {
+				m.cursor = len(mainMenuItems) - 1
 			}
+			m.renderMainMenu()
 		case input.KeyDown:
 			if m.cursor < len(mainMenuItems)-1 {
 				m.cursor++
+			} else {
+				m.cursor = 0
 			}
-		case input.KeyEnter:
+			m.renderMainMenu()
+		case input.KeyEnter, input.KeyRight:
 			m.executeMainMenu()
 		case input.KeyEsc:
 			m.state = StateStatus
 			m.renderStatus()
-		}
-		if m.state == StateMainMenu {
+		default:
 			m.renderMainMenu()
 		}
-	case StateMaintenance:
+
+	case StateModules:
+		modules := m.getModuleList()
 		switch ev {
-		case input.KeyEnter:
-			m.state = StateConfirm
-			m.confirmAction = func() error {
-				m.logger.Info("Executing maintenance action")
-				return nil
+		case input.KeyUp:
+			if m.moduleCursor > 0 {
+				m.moduleCursor--
+			} else if len(modules) > 0 {
+				m.moduleCursor = len(modules) - 1
 			}
-			m.oled.RenderConfirm("Execute Action?")
-		case input.KeyEsc:
+			m.renderModulesMenu()
+		case input.KeyDown:
+			if m.moduleCursor < len(modules)-1 {
+				m.moduleCursor++
+			} else {
+				m.moduleCursor = 0
+			}
+			m.renderModulesMenu()
+		case input.KeyEnter:
+			if m.moduleCursor >= 0 && m.moduleCursor < len(modules) {
+				mod := modules[m.moduleCursor]
+				if mod.Enabled {
+					_ = m.registry.Disable(mod.Name)
+				} else {
+					_ = m.registry.Enable(mod.Name)
+				}
+			}
+			m.renderModulesMenu()
+		case input.KeyEsc, input.KeyLeft:
 			m.state = StateMainMenu
 			m.renderMainMenu()
 		}
+
+	case StateWiFi:
+		if ev == input.KeyEsc || ev == input.KeyEnter || ev == input.KeyLeft {
+			m.state = StateMainMenu
+			m.renderMainMenu()
+		}
+
+	case StateMaintenance:
+		maintItems := []string{"CO2 Cal (400ppm)", "PMS Reset", "Fan Toggle"}
+		switch ev {
+		case input.KeyUp:
+			if m.maintCursor > 0 {
+				m.maintCursor--
+			} else {
+				m.maintCursor = len(maintItems) - 1
+			}
+			m.renderMaintenanceMenu()
+		case input.KeyDown:
+			if m.maintCursor < len(maintItems)-1 {
+				m.maintCursor++
+			} else {
+				m.maintCursor = 0
+			}
+			m.renderMaintenanceMenu()
+		case input.KeyEnter:
+			m.state = StateConfirm
+			actionName := maintItems[m.maintCursor]
+			switch m.maintCursor {
+			case 0:
+				m.confirmAction = func() error { return m.mega.SetCO2Calibration() }
+			case 1:
+				m.confirmAction = func() error { return m.mega.SetPMSReset() }
+			case 2:
+				m.confirmAction = func() error { return m.mega.SetFan(true) }
+			}
+			m.oled.RenderConfirm(fmt.Sprintf("Run: %s?", actionName))
+		case input.KeyEsc, input.KeyLeft:
+			m.state = StateMainMenu
+			m.renderMainMenu()
+		}
+
 	case StateConfirm:
 		switch ev {
 		case input.KeyEnter:
@@ -191,54 +258,30 @@ func (m *MenuController) handleKey(ev input.KeyEvent) {
 			}
 			m.state = StateMainMenu
 			m.renderMainMenu()
-		case input.KeyEsc:
+		case input.KeyEsc, input.KeyLeft:
+			m.state = StateMaintenance
+			m.renderMaintenanceMenu()
+		}
+
+	case StateSystemInfo:
+		if ev == input.KeyEsc || ev == input.KeyEnter || ev == input.KeyLeft {
 			m.state = StateMainMenu
 			m.renderMainMenu()
 		}
-	case StateSystemInfo, StateSensor, StateModules, StateWiFi:
-		if ev == input.KeyEsc {
-			m.state = StateMainMenu
-			m.renderMainMenu()
-		}
+
 	default:
-		if ev == input.KeyEsc {
-			m.state = StateMainMenu
-			m.renderMainMenu()
-		}
+		m.state = StateStatus
+		m.renderStatus()
 	}
 }
 
 func (m *MenuController) executeMainMenu() {
 	switch m.cursor {
-	case 0:
-		m.state = StateSensor
-		data := mcu.SensorData{}
-		if m.bus != nil {
-			data = m.bus.Latest()
-		}
-		m.oled.RenderText("Sensor Data", []string{
-			fmt.Sprintf("T:%.1fC H:%.1f%%", data.Temp, data.Humi),
-			fmt.Sprintf("CO2:%d TVOC:%d", data.CO2, data.TVOC),
-			fmt.Sprintf("PM1:%d PM2.5:%d", data.PM1_AE, data.PM25_AE),
-			fmt.Sprintf("PM10:%d Lux:%d", data.PM10_AE, data.Illuminance),
-		})
-	case 1:
+	case 0: // Module Control
 		m.state = StateModules
-		var lines []string
-		if m.registry != nil {
-			for _, st := range m.registry.StatusAll() {
-				state := "[OFF]"
-				if st.Enabled {
-					state = "[ON]"
-				}
-				lines = append(lines, fmt.Sprintf("%-10s %s", st.Name, state))
-			}
-		}
-		if len(lines) == 0 {
-			lines = []string{"No modules found"}
-		}
-		m.oled.RenderText("Modules", lines)
-	case 2:
+		m.moduleCursor = 0
+		m.renderModulesMenu()
+	case 1: // WiFi Status
 		m.state = StateWiFi
 		netState := "None"
 		ip := "-"
@@ -253,25 +296,66 @@ func (m *MenuController) executeMainMenu() {
 				ssid = nssid
 			}
 		}
-		m.oled.RenderText("WiFi Setup", []string{
+		m.oled.RenderText("WiFi Status", []string{
 			fmt.Sprintf("State: %s", netState),
 			fmt.Sprintf("IP: %s", ip),
 			fmt.Sprintf("SSID: %s", ssid),
+			"Press Esc to back",
 		})
-	case 3:
+	case 2: // Maintenance
 		m.state = StateMaintenance
-		m.oled.RenderText("Maintenance", []string{"[Enter] CO2 Cal 400", "[Enter] PMS Reset", "[Enter] Toggle Fan"})
-	case 4:
+		m.maintCursor = 0
+		m.renderMaintenanceMenu()
+	case 3: // System Info
 		m.state = StateSystemInfo
 		m.oled.RenderText("System Info", []string{
 			fmt.Sprintf("ID: %s", m.deviceID),
 			fmt.Sprintf("Ver: %s", m.version),
-			"maps6d systemd active",
+			"maps6d active",
+			"Press Esc to back",
 		})
 	default:
 		m.state = StateStatus
 		m.renderStatus()
 	}
+}
+
+func (m *MenuController) getModuleList() []module.ModuleStatus {
+	if m.registry == nil {
+		return nil
+	}
+	return m.registry.StatusAll()
+}
+
+func (m *MenuController) renderModulesMenu() {
+	if m.oled == nil {
+		return
+	}
+	modules := m.getModuleList()
+	var items []string
+	for _, mod := range modules {
+		state := "[OFF]"
+		if mod.Enabled {
+			state = "[ON ]"
+		}
+		items = append(items, fmt.Sprintf("%-12s %s", mod.Name, state))
+	}
+	if len(items) == 0 {
+		items = []string{"No modules"}
+	}
+	m.oled.RenderMenu("Module Control", items, m.moduleCursor)
+}
+
+func (m *MenuController) renderMaintenanceMenu() {
+	if m.oled == nil {
+		return
+	}
+	items := []string{
+		"CO2 Cal (400ppm)",
+		"PMS Sensor Reset",
+		"Fan Toggle ON",
+	}
+	m.oled.RenderMenu("Maintenance", items, m.maintCursor)
 }
 
 func (m *MenuController) renderStatus() {

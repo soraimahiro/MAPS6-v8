@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	OLEDWidth  = 128
-	OLEDHeight = 64
-	I2CSlave   = 0x0703
+	OLEDWidth   = 128
+	OLEDHeight  = 64
+	I2CSlave    = 0x0703
 	SSD1306Addr = 0x3C
 )
 
@@ -134,9 +134,9 @@ func (d *OLEDDisplay) initSSD1306() error {
 		0x81, 0xCF, // Set Contrast Control: 0xCF
 		0xD9, 0xF1, // Set Pre-charge Period
 		0xDB, 0x40, // Set VCOMH Deselect Level
-		0xA4,       // Entire Display ON (output follows RAM content)
-		0xA6,       // Set Normal (non-inverted) Display
-		0xAF,       // Turn Display ON
+		0xA4, // Entire Display ON (output follows RAM content)
+		0xA6, // Set Normal (non-inverted) Display
+		0xAF, // Turn Display ON
 	}
 	return d.writeCommands(cmds...)
 }
@@ -229,35 +229,41 @@ func (d *OLEDDisplay) RenderStatus(deviceID string, data mcu.SensorData, netStat
 	// Line 7 Right Bottom: CSQ, Version, Network Icon
 	netIcon := "-"
 	if netState == "wifi" || netState == "WiFi" || netState == "1" {
-		netIcon = "W"
+		netIcon = "Wifi"
 	} else if netState == "nbiot" || netState == "NBIOT" || netState == "2" {
-		netIcon = "N"
+		netIcon = "Nbiot"
 	}
 
 	if csq == "" {
 		csq = "-"
 	}
-	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 80, 43, fmt.Sprintf("csq: %s", csq), white)
-	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 80, 52, fmt.Sprintf("V%s", version), white)
-	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 112, 52, netIcon, white)
+	// tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 80, 43, fmt.Sprintf("csq: %s", csq), white)
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 80, 43, fmt.Sprintf("V%s", version), white)
+	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 80, 52, netIcon, white)
 
 	_ = d.Flush()
 }
 
-// RenderMenu renders the interactive menu
+// RenderMenu renders the interactive menu with scrolling support
 func (d *OLEDDisplay) RenderMenu(title string, items []string, cursor int) {
 	d.Clear()
 	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
 
 	tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, 8, title, white)
-	curY := int16(18)
 
-	for i, item := range items {
+	maxVisible := 5
+	startIdx := 0
+	if cursor >= maxVisible {
+		startIdx = cursor - maxVisible + 1
+	}
+
+	curY := int16(19)
+	for i := startIdx; i < len(items) && i < startIdx+maxVisible; i++ {
 		prefix := "  "
 		if i == cursor {
 			prefix = "> "
 		}
-		tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, prefix+item, white)
+		tinyfont.WriteLine(d, &proggy.TinySZ8pt7b, 0, curY, prefix+items[i], white)
 		curY += 9
 	}
 	_ = d.Flush()
