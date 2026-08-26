@@ -13,6 +13,7 @@ import (
 
 	"maps6/internal/bus"
 	"maps6/internal/config"
+	"maps6/internal/display"
 	"maps6/internal/ipc"
 	"maps6/internal/mcu"
 	"maps6/internal/module"
@@ -93,9 +94,15 @@ func main() {
 		}
 	}
 
+	// Wait for Mega2560 bootloader reset after opening serial port (DTR reset pulse)
+	slog.Info("Waiting for Mega2560 MCU bootloader to initialize...")
+	time.Sleep(2 * time.Second)
+
 	mega := mcu.NewMega2560(port)
 	if err := mega.SetSensorPolling(true, true, true, true, true, true); err != nil {
 		slog.Error("Failed to set sensor polling", "err", err)
+	} else {
+		slog.Info("Mega2560 sensor polling configured successfully")
 	}
 	_ = mega.SetFan(true)
 	_ = mega.SetPinLEDAll(true)
@@ -104,19 +111,20 @@ func main() {
 
 	if fw, err := mega.GetFirmwareVersion(); err == nil {
 		slog.Info("MCU Firmware", "version", fw)
+	} else {
+		slog.Warn("Failed to read MCU firmware version", "err", err)
 	}
 
 	sensorBus := bus.NewSensorBus()
 	registry := module.NewRegistry(cfg, *configPath)
 
 	otaUpdater := ota.NewUpdater(&cfg.OTA, Version)
-	
 	netMgr := network.NewManager(cfg)
 
 	registry.Register("wifi", netMgr)
 	registry.Register("lass", upload.NewLASSModule(cfg, sensorBus, deviceID, netMgr))
 	registry.Register("mqtt", upload.NewMQTTModule(cfg, sensorBus, deviceID, netMgr.IsConnected))
-	registry.Register("oled", NewStubModule("oled"))
+	registry.Register("oled", display.NewModule(cfg, sensorBus, registry, netMgr, mega, deviceID, Version))
 	registry.Register("storage_local", storage.NewLocalModule(cfg, sensorBus, deviceID))
 	registry.Register("storage_ext", storage.NewExternalModule(cfg, sensorBus, deviceID))
 	registry.Register("ota", otaUpdater)
@@ -157,6 +165,14 @@ func main() {
 				continue
 			}
 			sensorBus.Publish(data)
+			slog.Info("Sensor data updated",
+				"temp", data.Temp,
+				"humi", data.Humi,
+				"co2", data.CO2,
+				"tvoc", data.TVOC,
+				"pm25", data.PM25_AE,
+				"lux", data.Illuminance,
+			)
 		case <-sigCh:
 			slog.Info("Shutting down...")
 			registry.StopAll()

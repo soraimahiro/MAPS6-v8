@@ -34,7 +34,7 @@ func NewModule(
 	mega *mcu.Mega2560,
 	deviceID, version string,
 ) module.Module {
-	fontPath := "/Users/mahiro/Documents/project/maps6/system_v8/fonts/NotoSans-Regular.ttf"
+	fontPath := "/home/pi/maps6/fonts/NotoSans-Regular.ttf"
 	oled, err := NewOLEDDisplay(fontPath)
 	if err != nil {
 		slog.Error("Failed to initialize OLED display, using no-op stub", "error", err)

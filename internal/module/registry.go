@@ -114,14 +114,11 @@ func (r *Registry) startModule(parentCtx context.Context, name string, m *manage
 	ctx, cancel := context.WithCancel(parentCtx)
 	m.cancel = cancel
 
-	go func() {
-		if err := m.mod.Start(ctx); err != nil {
-			slog.Error("Module stopped with error", "name", name, "error", err)
-		} else {
-			slog.Info("Module stopped cleanly", "name", name)
-		}
-	}()
-	slog.Info("Module started", "name", name)
+	if err := m.mod.Start(ctx); err != nil {
+		slog.Error("Failed to start module", "name", name, "error", err)
+	} else {
+		slog.Info("Module started", "name", name)
+	}
 }
 
 // Enable marks a module as enabled, starts it, and saves the config.

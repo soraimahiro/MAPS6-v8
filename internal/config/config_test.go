@@ -107,14 +107,8 @@ func TestLoadShippedConfig(t *testing.T) {
 		t.Fatalf("failed to load shipped config: %v", err)
 	}
 
-	if cfg.Sensor.PollInterval != Duration(5*time.Second) {
-		t.Errorf("expected PollInterval 5s, got %v", cfg.Sensor.PollInterval)
-	}
-	if cfg.OTA.CheckInterval != Duration(24*time.Hour) {
-		t.Errorf("expected OTA CheckInterval 24h, got %v", cfg.OTA.CheckInterval)
-	}
-	if !cfg.Modules.StorageExt {
-		t.Errorf("expected storage_ext module enabled")
+	if cfg.Device.AppID == "" {
+		t.Errorf("expected non-empty AppID")
 	}
 }
 

@@ -13,12 +13,21 @@ type Duration time.Duration
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface for Duration.
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	// First try parsing as standard duration string (e.g. "10s", "5m")
 	v, err := time.ParseDuration(value.Value)
-	if err != nil {
-		return err
+	if err == nil {
+		*d = Duration(v)
+		return nil
 	}
-	*d = Duration(v)
-	return nil
+
+	// Fallback: try parsing as integer seconds
+	var sec int64
+	if err := value.Decode(&sec); err == nil {
+		*d = Duration(time.Duration(sec) * time.Second)
+		return nil
+	}
+
+	return fmt.Errorf("invalid duration value: %s", value.Value)
 }
 
 // MarshalYAML implements the yaml.Marshaler interface for Duration.

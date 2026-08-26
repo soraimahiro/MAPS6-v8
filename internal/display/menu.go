@@ -212,19 +212,62 @@ func (m *MenuController) executeMainMenu() {
 	switch m.cursor {
 	case 0:
 		m.state = StateSensor
-		m.oled.RenderText("Sensors", []string{"All sensors OK"})
+		data := mcu.SensorData{}
+		if m.bus != nil {
+			data = m.bus.Latest()
+		}
+		m.oled.RenderText("Sensor Data", []string{
+			fmt.Sprintf("T:%.1fC H:%.1f%%", data.Temp, data.Humi),
+			fmt.Sprintf("CO2:%d TVOC:%d", data.CO2, data.TVOC),
+			fmt.Sprintf("PM1:%d PM2.5:%d", data.PM1_AE, data.PM25_AE),
+			fmt.Sprintf("PM10:%d Lux:%d", data.PM10_AE, data.Illuminance),
+		})
 	case 1:
 		m.state = StateModules
-		m.oled.RenderText("Modules", []string{"All modules OK"})
+		var lines []string
+		if m.registry != nil {
+			for _, st := range m.registry.StatusAll() {
+				state := "[OFF]"
+				if st.Enabled {
+					state = "[ON]"
+				}
+				lines = append(lines, fmt.Sprintf("%-10s %s", st.Name, state))
+			}
+		}
+		if len(lines) == 0 {
+			lines = []string{"No modules found"}
+		}
+		m.oled.RenderText("Modules", lines)
 	case 2:
 		m.state = StateWiFi
-		m.oled.RenderText("WiFi Setup", []string{"Connect via App"})
+		netState := "None"
+		ip := "-"
+		ssid := "-"
+		if m.networkMgr != nil {
+			st, nip, nssid := m.networkMgr.GetState()
+			netState = st.String()
+			if nip != "" {
+				ip = nip
+			}
+			if nssid != "" {
+				ssid = nssid
+			}
+		}
+		m.oled.RenderText("WiFi Setup", []string{
+			fmt.Sprintf("State: %s", netState),
+			fmt.Sprintf("IP: %s", ip),
+			fmt.Sprintf("SSID: %s", ssid),
+		})
 	case 3:
 		m.state = StateMaintenance
-		m.oled.RenderText("Maintenance", []string{"CO2 Cal", "PMS Reset", "Fan Toggle"})
+		m.oled.RenderText("Maintenance", []string{"[Enter] CO2 Cal 400", "[Enter] PMS Reset", "[Enter] Toggle Fan"})
 	case 4:
 		m.state = StateSystemInfo
-		m.oled.RenderText("System Info", []string{m.version, "Uptime: 10h"})
+		m.oled.RenderText("System Info", []string{
+			fmt.Sprintf("ID: %s", m.deviceID),
+			fmt.Sprintf("Ver: %s", m.version),
+			"maps6d systemd active",
+		})
 	default:
 		m.state = StateStatus
 		m.renderStatus()
@@ -235,14 +278,20 @@ func (m *MenuController) renderStatus() {
 	if m.oled == nil {
 		return
 	}
-	var netState = "Disconnected"
+	var netState = "None"
 	var ip = ""
 	if m.networkMgr != nil {
 		state, nip, _ := m.networkMgr.GetState()
-		netState = fmt.Sprint(state)
+		netState = state.String()
 		ip = nip
 	}
-	m.oled.RenderStatus(mcu.SensorData{}, netState, ip, m.version)
+
+	data := mcu.SensorData{}
+	if m.bus != nil {
+		data = m.bus.Latest()
+	}
+
+	m.oled.RenderStatus(m.deviceID, data, netState, ip, m.version, "")
 }
 
 func (m *MenuController) renderMainMenu() {

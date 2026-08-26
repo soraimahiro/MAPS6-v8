@@ -61,7 +61,7 @@ func (m *Mega2560) GetSensorAll() (SensorData, error) {
 	defer m.port.Unlock()
 	m.port.Flush()
 
-	packet := BuildPacket(CmdGetSensorAll, nil)
+	packet := BuildCommandPacket(CmdGetSensorAll)
 	if _, err := m.port.Write(packet); err != nil {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
@@ -308,7 +308,7 @@ func (m *Mega2560) GetFirmwareVersion() (int, error) {
 	defer m.port.Unlock()
 	m.port.Flush()
 
-	packet := BuildPacket(CmdGetInfoVersion, nil)
+	packet := BuildCommandPacket(CmdGetInfoVersion)
 	if _, err := m.port.Write(packet); err != nil {
 		return 0, err
 	}
@@ -348,7 +348,7 @@ func (m *Mega2560) GetRuntime() (days, hours, mins, secs int, err error) {
 	defer m.port.Unlock()
 	m.port.Flush()
 
-	packet := BuildPacket(CmdGetInfoRuntime, nil)
+	packet := BuildCommandPacket(CmdGetInfoRuntime)
 	if _, err := m.port.Write(packet); err != nil {
 		return 0, 0, 0, 0, err
 	}
@@ -390,7 +390,7 @@ func (m *Mega2560) GetErrorLog() (map[string]int, error) {
 	defer m.port.Unlock()
 	m.port.Flush()
 
-	packet := BuildPacket(CmdGetInfoError, nil)
+	packet := BuildCommandPacket(CmdGetInfoError)
 	if _, err := m.port.Write(packet); err != nil {
 		return nil, err
 	}
@@ -428,7 +428,7 @@ func (m *Mega2560) GetPinState() (map[string]bool, error) {
 	defer m.port.Unlock()
 	m.port.Flush()
 
-	packet := BuildPacket(CmdGetPinState, nil)
+	packet := BuildCommandPacket(CmdGetPinState)
 	if _, err := m.port.Write(packet); err != nil {
 		return nil, err
 	}
