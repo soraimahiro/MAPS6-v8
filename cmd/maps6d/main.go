@@ -165,14 +165,6 @@ func main() {
 				continue
 			}
 			sensorBus.Publish(data)
-			slog.Info("Sensor data updated",
-				"temp", data.Temp,
-				"humi", data.Humi,
-				"co2", data.CO2,
-				"tvoc", data.TVOC,
-				"pm25", data.PM25_AE,
-				"lux", data.Illuminance,
-			)
 		case <-sigCh:
 			slog.Info("Shutting down...")
 			registry.StopAll()
