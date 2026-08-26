@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"maps6/internal/bus"
@@ -49,7 +50,7 @@ type MenuController struct {
 	deviceID      string
 	version       string
 	logger        *slog.Logger
-	running       bool
+	running       atomic.Bool
 	mu            sync.Mutex
 	done          chan struct{}
 }
@@ -83,14 +84,10 @@ func (m *MenuController) Name() string {
 }
 
 func (m *MenuController) Start(ctx context.Context) error {
-	m.mu.Lock()
-	if m.running {
-		m.mu.Unlock()
+	if m.running.Swap(true) {
 		return nil
 	}
-	m.running = true
 	m.done = make(chan struct{})
-	m.mu.Unlock()
 
 	if err := m.keyboard.Start(); err != nil {
 		m.logger.Warn("Failed to start keyboard", "error", err)
@@ -198,12 +195,16 @@ func (m *MenuController) handleKey(ev input.KeyEvent) {
 		case input.KeyEnter:
 			if m.moduleCursor >= 0 && m.moduleCursor < len(modules) {
 				mod := modules[m.moduleCursor]
-				if mod.Enabled {
-					_ = m.registry.Disable(mod.Name)
-				} else {
-					_ = m.registry.Enable(mod.Name)
-				}
+				// Avoid deadlock when toggling oled itself or blocking on lock
+				go func(modName string, isEnabled bool) {
+					if isEnabled {
+						_ = m.registry.Disable(modName)
+					} else {
+						_ = m.registry.Enable(modName)
+					}
+				}(mod.Name, mod.Enabled)
 			}
+			time.Sleep(50 * time.Millisecond)
 			m.renderModulesMenu()
 		case input.KeyEsc, input.KeyLeft:
 			m.state = StateMainMenu
@@ -386,22 +387,19 @@ func (m *MenuController) renderMainMenu() {
 }
 
 func (m *MenuController) Stop() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.running {
+	if !m.running.Swap(false) {
 		return nil
 	}
-	close(m.done)
-	m.running = false
+	if m.done != nil {
+		close(m.done)
+	}
 	return nil
 }
 
 func (m *MenuController) Status() module.ModuleStatus {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	return module.ModuleStatus{
 		Name:    m.Name(),
 		Enabled: true,
-		Running: m.running,
+		Running: m.running.Load(),
 	}
 }
