@@ -20,6 +20,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"maps6/internal/bus"
 	"maps6/internal/config"
+	"maps6/internal/ipc"
 	"maps6/internal/mcu"
 	"maps6/internal/module"
 )
@@ -52,6 +53,15 @@ type MQTTModule struct {
 	mu      sync.RWMutex
 	running bool
 	err     error
+
+	// Metrics & telemetry
+	statsMu             sync.RWMutex
+	sensorPublishCount  int64
+	sensorPublishErrors int64
+	lastSensorPublish   time.Time
+	statusPublishCount  int64
+	statusPublishErrors int64
+	lastStatusPublish   time.Time
 }
 
 // NewMQTTModule creates a new MQTTModule.
@@ -137,49 +147,91 @@ func (m *MQTTModule) Start(ctx context.Context) error {
 	offlinePayload := fmt.Sprintf(`{"online":false,"timestamp":"%s"}`, time.Now().UTC().Format(time.RFC3339))
 	opts.SetWill(onlineTopic, offlinePayload, 1, true)
 
-	// 2. OnConnect: publish online = true & subscribe to command topic
-	opts.OnConnect = func(c mqtt.Client) {
-		slog.Info("mqtt connected to broker", "broker", brokerURL)
+		// 2. OnConnect: publish online = true & subscribe to command topic
+		opts.OnConnect = func(c mqtt.Client) {
+			slog.Info("mqtt connected to broker", "broker", brokerURL)
+			m.mu.Lock()
+			m.err = nil
+			m.mu.Unlock()
 
-		// Publish online status (Retain: true)
-		onlinePayload := fmt.Sprintf(`{"online":true,"timestamp":"%s"}`, time.Now().UTC().Format(time.RFC3339))
-		c.Publish(onlineTopic, 1, true, []byte(onlinePayload))
+			// Publish online status (Retain: true)
+			onlinePayload := fmt.Sprintf(`{"online":true,"timestamp":"%s"}`, time.Now().UTC().Format(time.RFC3339))
+			c.Publish(onlineTopic, 1, true, []byte(onlinePayload))
 
-		// Subscribe to remote command topic
-		cmdTopic := fmt.Sprintf("%s/%s/command", m.cfg.Upload.MQTT.TopicPrefix, m.deviceID)
-		c.Subscribe(cmdTopic, 1, func(_ mqtt.Client, msg mqtt.Message) {
-			m.handleCommand(msg.Payload())
-		})
+			// Subscribe to remote command topic
+			cmdTopic := fmt.Sprintf("%s/%s/command", m.cfg.Upload.MQTT.TopicPrefix, m.deviceID)
+			c.Subscribe(cmdTopic, 1, func(_ mqtt.Client, msg mqtt.Message) {
+				m.handleCommand(msg.Payload())
+			})
 
-		// Trigger background backfill check
-		go m.checkAndRunBackfill()
+			// Trigger background backfill check
+			go m.checkAndRunBackfill()
+		}
+
+		opts.OnConnectionLost = func(c mqtt.Client, err error) {
+			m.mu.Lock()
+			m.err = err
+			m.mu.Unlock()
+			slog.Error("mqtt connection lost", "error", err)
+		}
+
+		client := mqtt.NewClient(opts)
+		m.client = client
+
+		subCtx, cancel := context.WithCancel(ctx)
+		m.cancel = cancel
+
+		ch := m.bus.Subscribe("mqtt_upload", 10)
+
+		m.wg.Add(2)
+		go m.publishSensorTask(subCtx, ch)
+		go m.publishStatusTask(subCtx)
+
+		// Attempt initial connection
+		token := client.Connect()
+		if token.Wait() && token.Error() != nil {
+			m.mu.Lock()
+			m.err = token.Error()
+			m.mu.Unlock()
+			slog.Warn("mqtt initial connect failed, retrying in background", "error", token.Error())
+			m.wg.Add(1)
+			go m.reconnectLoop(subCtx)
+		}
+
+		slog.Info("mqtt module started with server integration", "broker", brokerURL)
+		return nil
+}
+
+func (m *MQTTModule) reconnectLoop(ctx context.Context) {
+	defer m.wg.Done()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if m.client == nil {
+				return
+			}
+			if m.client.IsConnected() {
+				return
+			}
+			token := m.client.Connect()
+			if token.Wait() && token.Error() == nil {
+				m.mu.Lock()
+				m.err = nil
+				m.mu.Unlock()
+				slog.Info("mqtt successfully connected to broker in background")
+				return
+			} else if token.Error() != nil {
+				m.mu.Lock()
+				m.err = token.Error()
+				m.mu.Unlock()
+			}
+		}
 	}
-
-	opts.OnConnectionLost = func(c mqtt.Client, err error) {
-		slog.Error("mqtt connection lost", "error", err)
-	}
-
-	client := mqtt.NewClient(opts)
-	if token := client.Connect(); token.Wait() && token.Error() != nil {
-		m.mu.Lock()
-		m.running = false
-		m.err = token.Error()
-		m.mu.Unlock()
-		return fmt.Errorf("failed to connect mqtt: %w", token.Error())
-	}
-	m.client = client
-
-	subCtx, cancel := context.WithCancel(ctx)
-	m.cancel = cancel
-
-	ch := m.bus.Subscribe("mqtt_upload", 10)
-
-	m.wg.Add(2)
-	go m.publishSensorTask(subCtx, ch)
-	go m.publishStatusTask(subCtx)
-
-	slog.Info("mqtt module started with server integration", "broker", brokerURL)
-	return nil
 }
 
 func (m *MQTTModule) Stop() error {
@@ -214,18 +266,77 @@ func (m *MQTTModule) Stop() error {
 
 func (m *MQTTModule) Status() module.ModuleStatus {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
+	running := m.running
 	var errStr string
 	if m.err != nil {
 		errStr = m.err.Error()
+	} else if running && !m.IsConnected() {
+		errStr = "disconnected from broker"
 	}
+	m.mu.RUnlock()
 
 	return module.ModuleStatus{
 		Name:      m.Name(),
 		Enabled:   m.cfg.Modules.MQTT,
-		Running:   m.running,
+		Running:   running,
 		LastError: errStr,
+	}
+}
+
+// GetMQTTStatus returns detailed MQTT telemetry and connection metrics.
+func (m *MQTTModule) GetMQTTStatus() ipc.MQTTStatus {
+	m.mu.RLock()
+	running := m.running
+	var lastErr string
+	if m.err != nil {
+		lastErr = m.err.Error()
+	} else if running && !m.IsConnected() {
+		lastErr = "disconnected from broker"
+	}
+	m.mu.RUnlock()
+
+	m.statsMu.RLock()
+	sCount := m.sensorPublishCount
+	sErrors := m.sensorPublishErrors
+	var sLast string
+	if !m.lastSensorPublish.IsZero() {
+		sLast = m.lastSensorPublish.Local().Format("2006-01-02 15:04:05")
+	}
+	stCount := m.statusPublishCount
+	stErrors := m.statusPublishErrors
+	var stLast string
+	if !m.lastStatusPublish.IsZero() {
+		stLast = m.lastStatusPublish.Local().Format("2006-01-02 15:04:05")
+	}
+	m.statsMu.RUnlock()
+
+	port := m.cfg.Upload.MQTT.Port
+	if port <= 0 {
+		if m.cfg.Upload.MQTT.UseTLS {
+			port = 8883
+		} else {
+			port = 1883
+		}
+	}
+
+	return ipc.MQTTStatus{
+		Enabled:             m.cfg.Modules.MQTT,
+		Running:             running,
+		Connected:           m.IsConnected(),
+		Broker:              m.cfg.Upload.MQTT.Broker,
+		Port:                port,
+		UseTLS:              m.cfg.Upload.MQTT.UseTLS,
+		ClientID:            m.deviceID,
+		TopicPrefix:         m.cfg.Upload.MQTT.TopicPrefix,
+		SensorIntervalSec:   int(m.getSensorInterval().Seconds()),
+		StatusIntervalSec:   int(m.getStatusInterval().Seconds()),
+		SensorPublishCount:  sCount,
+		SensorPublishErrors: sErrors,
+		LastSensorPublish:   sLast,
+		StatusPublishCount:  stCount,
+		StatusPublishErrors: stErrors,
+		LastStatusPublish:   stLast,
+		LastError:           lastErr,
 	}
 }
 
@@ -357,8 +468,17 @@ func (m *MQTTModule) publishSensorTask(ctx context.Context, ch <-chan mcu.Sensor
 			token := m.client.Publish(topic, qos, false, dataBytes)
 			go func(t mqtt.Token) {
 				<-t.Done()
+				m.statsMu.Lock()
+				defer m.statsMu.Unlock()
 				if t.Error() != nil {
+					m.sensorPublishErrors++
+					m.mu.Lock()
+					m.err = t.Error()
+					m.mu.Unlock()
 					slog.Error("mqtt failed to publish sensor data", "error", t.Error())
+				} else {
+					m.sensorPublishCount++
+					m.lastSensorPublish = time.Now()
 				}
 			}(token)
 		}
@@ -435,7 +555,22 @@ func (m *MQTTModule) publishStatusNow() {
 	}
 	topic := fmt.Sprintf("%s/%s/status", m.cfg.Upload.MQTT.TopicPrefix, m.deviceID)
 	qos := byte(m.cfg.Upload.MQTT.QoS)
-	m.client.Publish(topic, qos, true, dataBytes)
+	token := m.client.Publish(topic, qos, true, dataBytes)
+	go func(t mqtt.Token) {
+		<-t.Done()
+		m.statsMu.Lock()
+		defer m.statsMu.Unlock()
+		if t.Error() != nil {
+			m.statusPublishErrors++
+			m.mu.Lock()
+			m.err = t.Error()
+			m.mu.Unlock()
+			slog.Error("mqtt failed to publish status payload", "error", t.Error())
+		} else {
+			m.statusPublishCount++
+			m.lastStatusPublish = time.Now()
+		}
+	}(token)
 }
 
 func (m *MQTTModule) publishStatusTask(ctx context.Context) {

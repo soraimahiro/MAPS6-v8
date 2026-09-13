@@ -19,6 +19,7 @@ const (
 	MethodTriggerPMSReset  = "triggerPMSReset"
 	MethodTriggerOTACheck  = "triggerOTACheck"
 	MethodTriggerOTAUpdate = "triggerOTAUpdate"
+	MethodGetMQTTStatus    = "getMQTTStatus"
 )
 
 // Request defines the structure of an IPC request.
@@ -48,14 +49,36 @@ type ConnectWiFiParams struct {
 
 // SystemInfo defines the payload for MethodGetSystemInfo.
 type SystemInfo struct {
-	DeviceID    string          `json:"device_id"`
-	Version     string          `json:"version"`
-	UptimeSec   int64           `json:"uptime_sec"`
-	MCUFirmware int             `json:"mcu_firmware"`
+	DeviceID     string          `json:"device_id"`
+	Version      string          `json:"version"`
+	UptimeSec    int64           `json:"uptime_sec"`
+	MCUFirmware  int             `json:"mcu_firmware"`
 	NetworkState string          `json:"network_state"`
-	IP          string          `json:"ip"`
-	SSID        string          `json:"ssid"`
-	Modules     map[string]bool `json:"modules"`
+	IP           string          `json:"ip"`
+	SSID         string          `json:"ssid"`
+	Modules      map[string]bool `json:"modules"`
+	MQTT         *MQTTStatus     `json:"mqtt,omitempty"`
+}
+
+// MQTTStatus defines the payload for MethodGetMQTTStatus and MQTT telemetry details.
+type MQTTStatus struct {
+	Enabled             bool   `json:"enabled"`
+	Running             bool   `json:"running"`
+	Connected           bool   `json:"connected"`
+	Broker              string `json:"broker"`
+	Port                int    `json:"port"`
+	UseTLS              bool   `json:"use_tls"`
+	ClientID            string `json:"client_id"`
+	TopicPrefix         string `json:"topic_prefix"`
+	SensorIntervalSec   int    `json:"sensor_interval_sec"`
+	StatusIntervalSec   int    `json:"status_interval_sec"`
+	SensorPublishCount  int64  `json:"sensor_publish_count"`
+	SensorPublishErrors int64  `json:"sensor_publish_errors"`
+	LastSensorPublish   string `json:"last_sensor_publish,omitempty"`
+	StatusPublishCount  int64  `json:"status_publish_count"`
+	StatusPublishErrors int64  `json:"status_publish_errors"`
+	LastStatusPublish   string `json:"last_status_publish,omitempty"`
+	LastError           string `json:"last_error,omitempty"`
 }
 
 // NewSuccessResponse creates a successful Response with encoded data.

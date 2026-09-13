@@ -163,6 +163,23 @@ func main() {
 		}
 		fmt.Println("PMS reset triggered")
 
+	case "mqtt":
+		resp, err := client.Call(ipc.MethodGetMQTTStatus, nil)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if !resp.Success {
+			fmt.Printf("Error: %s\n", resp.Error)
+			return
+		}
+		var st ipc.MQTTStatus
+		if err := json.Unmarshal(resp.Data, &st); err != nil {
+			printData(resp.Data)
+			return
+		}
+		printMQTTStatus(st)
+
 	case "wifi":
 		fmt.Println("wifi command not yet implemented")
 
@@ -206,6 +223,45 @@ func main() {
 	}
 }
 
+func printMQTTStatus(st ipc.MQTTStatus) {
+	fmt.Println("MQTT Module Status:")
+	fmt.Printf("  Module Enabled:     %v\n", st.Enabled)
+	fmt.Printf("  Module Running:     %v\n", st.Running)
+
+	connStr := "Disconnected"
+	if st.Connected {
+		connStr = "Connected"
+	}
+	fmt.Printf("  Connection State:   %s\n", connStr)
+	scheme := "tcp"
+	if st.UseTLS {
+		scheme = "ssl"
+	}
+	fmt.Printf("  Broker Target:      %s://%s:%d\n", scheme, st.Broker, st.Port)
+	fmt.Printf("  Client ID:          %s\n", st.ClientID)
+	fmt.Printf("  Topic Prefix:       %s\n", st.TopicPrefix)
+	fmt.Printf("  Sensor Telemetry:   %s/%s/sensor (interval: %ds)\n", st.TopicPrefix, st.ClientID, st.SensorIntervalSec)
+	fmt.Printf("  Status Telemetry:   %s/%s/status (interval: %ds)\n", st.TopicPrefix, st.ClientID, st.StatusIntervalSec)
+
+	lastSensor := st.LastSensorPublish
+	if lastSensor == "" {
+		lastSensor = "never"
+	}
+	fmt.Printf("  Sensor Publishes:   %d sent, %d failed (last: %s)\n", st.SensorPublishCount, st.SensorPublishErrors, lastSensor)
+
+	lastStatus := st.LastStatusPublish
+	if lastStatus == "" {
+		lastStatus = "never"
+	}
+	fmt.Printf("  Status Publishes:   %d sent, %d failed (last: %s)\n", st.StatusPublishCount, st.StatusPublishErrors, lastStatus)
+
+	if st.LastError != "" {
+		fmt.Printf("  Last Error:         %s\n", st.LastError)
+	} else {
+		fmt.Printf("  Last Error:         none\n")
+	}
+}
+
 func printUsage() {
 	fmt.Println(`Usage: maps6ctl <command> [options]
 Commands:
@@ -213,6 +269,7 @@ Commands:
   status              Show system status
   sensor              Show latest sensor data
   module              Manage modules (list/enable/disable)
+  mqtt                Show MQTT connection and upload status
   co2-cal             Trigger CO2 baseline calibration
   pms-reset           Trigger PMS sensor reset
   wifi                Manage WiFi (scan/connect)

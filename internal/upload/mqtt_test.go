@@ -123,7 +123,7 @@ func TestMQTTModuleLiveServerIntegration(t *testing.T) {
 	cfg.Upload.MQTT.Broker = "127.0.0.1"
 	cfg.Upload.MQTT.Port = 1883
 	cfg.Upload.MQTT.Username = "maps"
-	cfg.Upload.MQTT.Password = "iisnrl"
+	cfg.Upload.MQTT.Password = "raspberry"
 	cfg.Upload.MQTT.UseTLS = false
 	cfg.Upload.MQTT.Interval = config.Duration(1 * time.Second)
 
@@ -151,5 +151,13 @@ func TestMQTTModuleLiveServerIntegration(t *testing.T) {
 	})
 
 	time.Sleep(1200 * time.Millisecond)
+
+	st := mod.GetMQTTStatus()
+	if !st.Connected {
+		t.Errorf("expected GetMQTTStatus().Connected to be true")
+	}
+	if st.SensorPublishCount == 0 {
+		t.Errorf("expected at least 1 sensor publish")
+	}
 }
 

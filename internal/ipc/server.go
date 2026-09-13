@@ -141,6 +141,20 @@ func (s *Server) dispatch(req Request) Response {
 		}
 		return NewSuccessResponse(nil)
 
+	case MethodGetMQTTStatus:
+		mod, ok := s.registry.Get("mqtt")
+		if !ok {
+			return NewErrorResponse("mqtt module not registered")
+		}
+		type mqttStatusGetter interface {
+			GetMQTTStatus() MQTTStatus
+		}
+		getter, ok := mod.(mqttStatusGetter)
+		if !ok {
+			return NewErrorResponse("mqtt module does not support status query")
+		}
+		return NewSuccessResponse(getter.GetMQTTStatus())
+
 	case MethodGetSystemInfo:
 		mcuFirmware, _ := s.mega.GetFirmwareVersion()
 		netType, ip, ssid := "", "", ""
@@ -151,6 +165,18 @@ func (s *Server) dispatch(req Request) Response {
 		for _, status := range s.registry.StatusAll() {
 			modulesMap[status.Name] = status.Enabled
 		}
+
+		var mqttStatus *MQTTStatus
+		if mod, ok := s.registry.Get("mqtt"); ok {
+			type mqttStatusGetter interface {
+				GetMQTTStatus() MQTTStatus
+			}
+			if getter, ok := mod.(mqttStatusGetter); ok {
+				st := getter.GetMQTTStatus()
+				mqttStatus = &st
+			}
+		}
+
 		info := SystemInfo{
 			DeviceID:     s.deviceID,
 			Version:      s.version,
@@ -160,6 +186,7 @@ func (s *Server) dispatch(req Request) Response {
 			IP:           ip,
 			SSID:         ssid,
 			Modules:      modulesMap,
+			MQTT:         mqttStatus,
 		}
 		return NewSuccessResponse(info)
 
