@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -109,8 +110,10 @@ func main() {
 	_ = mega.SetStatusLED(1)
 	_ = mega.SetRTCDatetime(time.Now())
 
+	var mcuVersion string
 	if fw, err := mega.GetFirmwareVersion(); err == nil {
-		slog.Info("MCU Firmware", "version", fw)
+		mcuVersion = strconv.Itoa(fw)
+		slog.Info("MCU Firmware", "version", mcuVersion)
 	} else {
 		slog.Warn("Failed to read MCU firmware version", "err", err)
 	}
@@ -121,9 +124,19 @@ func main() {
 	otaUpdater := ota.NewUpdater(&cfg.OTA, Version)
 	netMgr := network.NewManager(cfg)
 
+	networkStateFn := func() (string, string, string) {
+		state, ip, ssid := netMgr.GetState()
+		return state.String(), ip, ssid
+	}
+
+	mqttModule := upload.NewMQTTModule(cfg, sensorBus, deviceID, netMgr.IsConnected)
+	mqttModule.SetNetworkStateFn(networkStateFn)
+	mqttModule.SetMCU(mega, mcuVersion)
+	mqttModule.SetRegistry(registry)
+
 	registry.Register("wifi", netMgr)
 	registry.Register("lass", upload.NewLASSModule(cfg, sensorBus, deviceID, netMgr))
-	registry.Register("mqtt", upload.NewMQTTModule(cfg, sensorBus, deviceID, netMgr.IsConnected))
+	registry.Register("mqtt", mqttModule)
 	registry.Register("oled", display.NewModule(cfg, sensorBus, registry, netMgr, mega, deviceID, Version))
 	registry.Register("storage_local", storage.NewLocalModule(cfg, sensorBus, deviceID))
 	registry.Register("storage_ext", storage.NewExternalModule(cfg, sensorBus, deviceID))
@@ -133,11 +146,6 @@ func main() {
 	defer cancel()
 
 	registry.StartEnabled(ctx)
-
-	networkStateFn := func() (string, string, string) {
-		state, ip, ssid := netMgr.GetState()
-		return state.String(), ip, ssid
-	}
 
 	ipcServer := ipc.NewServer(sensorBus, registry, mega, networkStateFn, otaUpdater, deviceID, Version, cfg)
 	if err := ipcServer.Start(ctx); err != nil {

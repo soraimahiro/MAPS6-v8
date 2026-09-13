@@ -85,14 +85,44 @@ type LASSConfig struct {
 }
 
 type MQTTConfig struct {
-	Broker      string   `yaml:"broker"`
-	Port        int      `yaml:"port"`
-	Username    string   `yaml:"username"`
-	Password    string   `yaml:"password"`
-	TopicPrefix string   `yaml:"topic_prefix"`
-	Keepalive   Duration `yaml:"keepalive"`
-	UseTLS      bool     `yaml:"use_tls"`
-	QoS         int      `yaml:"qos"`
+	Broker         string   `yaml:"broker"`
+	Port           int      `yaml:"port"`
+	Username       string   `yaml:"username"`
+	Password       string   `yaml:"password"`
+	TopicPrefix    string   `yaml:"topic_prefix"`
+	Keepalive      Duration `yaml:"keepalive"`
+	UseTLS         bool     `yaml:"use_tls"`
+	QoS            int      `yaml:"qos"`
+	Interval       Duration `yaml:"interval"`        // Sensor telemetry interval (default: 60s)
+	StatusInterval Duration `yaml:"status_interval"` // Status report interval (default: 300s)
+	ServerURL      string   `yaml:"server_url"`      // Central server HTTP URL for backfill (e.g. http://192.168.1.100:3000)
+}
+
+// GetInterval returns the sensor publish interval with a safe fallback to 60s.
+func (m *MQTTConfig) GetInterval() time.Duration {
+	if m.Interval <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(m.Interval)
+}
+
+// GetStatusInterval returns the status report interval with a safe fallback to 300s.
+func (m *MQTTConfig) GetStatusInterval() time.Duration {
+	if m.StatusInterval <= 0 {
+		return 300 * time.Second
+	}
+	return time.Duration(m.StatusInterval)
+}
+
+// GetServerURL returns the central server HTTP URL, deriving it from Broker if not explicitly set.
+func (m *MQTTConfig) GetServerURL() string {
+	if m.ServerURL != "" {
+		return m.ServerURL
+	}
+	if m.Broker != "" {
+		return fmt.Sprintf("http://%s:3000", m.Broker)
+	}
+	return ""
 }
 
 type StorageConfig struct {
@@ -171,11 +201,13 @@ func DefaultConfig() *Config {
 				RetryInterval: Duration(10 * time.Second),
 			},
 			MQTT: MQTTConfig{
-				Port:        8883,
-				TopicPrefix: "MAPS",
-				Keepalive:   Duration(270 * time.Second),
-				UseTLS:      true,
-				QoS:         1,
+				Port:           1883,
+				TopicPrefix:    "MAPS",
+				Keepalive:      Duration(60 * time.Second),
+				UseTLS:         false,
+				QoS:            1,
+				Interval:       Duration(60 * time.Second),
+				StatusInterval: Duration(300 * time.Second),
 			},
 		},
 		Storage: StorageConfig{
