@@ -1,22 +1,56 @@
 device:
   app_id: MAPS6
   version: 8.0.0
+
 serial:
   port: /dev/ttyS0
   fallback: /dev/ttyAMA0
   baud_rate: 115200
+
 sensor:
   poll_interval: 5s
+
 modules:
   wifi: true
   lass: false
-  mqtt: false
+  mqtt: true
   oled: true
   storage_local: true
   storage_ext: false
   ota: false
   lte: false
   gps: false
+
+upload:
+  lass:
+    url: "https://data.lass-net.org/Upload/MAPS-secure.php"
+    interval: 300s
+    retry_interval: 10s
+  mqtt:
+    broker: "192.168.1.100"
+    port: 1883
+    username: "maps"
+    password: "your_password"
+    topic_prefix: "MAPS"
+    keepalive: 60s
+    use_tls: false
+    qos: 1
+    interval: 60s
+    status_interval: 300s
+    server_url: "http://192.168.1.100:3000"
+
+storage:
+  local:
+    path: /home/pi/maps6/data
+    interval: 60s
+  external:
+    path: /mnt/SD
+    interval: 60s
+
+display:
+  refresh_interval: 300ms
+  menu_timeout: 30s
+
 ota:
   server_url: ""
   check_interval: 24h

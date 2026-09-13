@@ -68,11 +68,23 @@ Sensors → Mega2560 MCU → UART → maps6d → SensorBus ─┬→ LASS HTTP �
 
 ### MQTT Topic Structure
 
-| Topic | Direction | Description | QoS |
-|:---|:---|:---|:---|
-| `MAPS/{DEVICE_ID}/sensor` | Box → Broker | Sensor data (per upload interval) | 1 |
-| `MAPS/{DEVICE_ID}/status` | Box → Broker | System status (every 10 min) | 1 |
-| `MAPS/{DEVICE_ID}/command` | Broker → Box | Remote commands (reserved) | 1 |
+| Topic | Direction | Description | QoS | Retain |
+|:---|:---|:---|:---|:---|
+| `MAPS/{DEVICE_ID}/sensor` | Box → Broker | Real-time telemetry (23 metrics, per interval) | 1 | false |
+| `MAPS/{DEVICE_ID}/status` | Box → Broker | System status and active modules (every 5 min) | 1 | true |
+| `MAPS/{DEVICE_ID}/online` | Box → Broker | LWT online / offline status | 1 | true |
+| `MAPS/{DEVICE_ID}/command` | Broker → Box | Remote config and maintenance commands | 1 | true (config) |
+
+#### Remote Command Actions
+
+The daemon subscribes to `MAPS/{DEVICE_ID}/command` and processes the following actions:
+
+- `set_config`: Dynamically updates `sensor_interval`, `status_interval`, and upload toggles without restarting the daemon.
+- `trigger_co2_cal`: Executes Senseair S8 baseline calibration (atmospheric 400 ppm).
+- `trigger_pms_reset`: Sends a hardware reset pulse to the PMS7003 particulate matter sensor.
+- `trigger_backfill`: Triggers comparison with central server dates and backfills missing historical CSV records via HTTP.
+- `reboot`: Initiates a system reboot.
+- `set_module`: Enables or disables a specified module dynamically.
 
 ---
 
@@ -343,14 +355,17 @@ upload:
     interval: 300s           # seconds (5 min)
     retry_interval: 10s      # seconds
   mqtt:
-    broker: ""               # e.g. "mqtt.example.com"
-    port: 8883
-    username: ""
-    password: ""
+    broker: "192.168.1.100"   # Central server IP or hostname
+    port: 1883
+    username: "maps"
+    password: "your_password"
     topic_prefix: "MAPS"
-    keepalive: 270s
-    use_tls: true
+    keepalive: 60s
+    use_tls: false
     qos: 1
+    interval: 60s             # Sensor telemetry interval (default: 60s)
+    status_interval: 300s     # Status report interval (default: 300s)
+    server_url: "http://192.168.1.100:3000" # Central server HTTP API for historical backfill
 
 storage:
   local:
@@ -376,15 +391,16 @@ Module changes via `maps6ctl module enable/disable` are automatically saved back
 
 ## Sensor Data
 
-The system reads 22 sensor fields from the Mega2560 MCU:
+The system collects 23 sensor and system telemetry metrics (22 from Mega2560 MCU and 1 from host Raspberry Pi):
 
-| Sensor | Fields | Unit |
+| Sensor / Source | Fields | Unit |
 |:---|:---|:---|
 | SHT3x | Temperature, Humidity | °C, %RH |
 | Senseair S8 | CO2, Average CO2 | ppm |
-| SGP30 | TVOC, eCO2, H2, Ethanol, Baselines | ppb, ppm, Raw |
-| TCS34725 | Illuminance, Color Temp, R/G/B/C | Lux, °K, Raw |
-| PMS7003 | PM1.0/2.5/10 (AE + SP) | µg/m³ |
+| SGP30 | TVOC, eCO2, H2, Ethanol, Baselines (TVOC & eCO2) | ppb, ppm, Raw |
+| TCS34725 | Illuminance, Color Temp, R/G/B/C Channels | Lux, °K, Raw |
+| PMS7003 | PM1.0/2.5/10 (Atmospheric AE & Standard SP) | µg/m³ |
+| Raspberry Pi Host | CPU Core Temperature | °C |
 
 ### CSV Storage Format
 
