@@ -180,6 +180,42 @@ func main() {
 		}
 		printMQTTStatus(st)
 
+	case "backfill":
+		if len(os.Args) >= 3 && os.Args[2] == "trigger" {
+			var dates []string
+			if len(os.Args) >= 4 {
+				dates = os.Args[3:]
+			}
+			params, _ := json.Marshal(ipc.TriggerBackfillParams{Dates: dates})
+			resp, err := client.Call(ipc.MethodTriggerBackfill, params)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			if !resp.Success {
+				fmt.Printf("Error: %s\n", resp.Error)
+				return
+			}
+			fmt.Println("Historical backfill triggered successfully")
+			return
+		}
+
+		resp, err := client.Call(ipc.MethodGetBackfillStatus, nil)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
+		if !resp.Success {
+			fmt.Printf("Error: %s\n", resp.Error)
+			return
+		}
+		var st ipc.BackfillStatus
+		if err := json.Unmarshal(resp.Data, &st); err != nil {
+			printData(resp.Data)
+			return
+		}
+		printBackfillStatus(st)
+
 	case "wifi":
 		fmt.Println("wifi command not yet implemented")
 
@@ -223,6 +259,25 @@ func main() {
 	}
 }
 
+func printBackfillStatus(st ipc.BackfillStatus) {
+	fmt.Println("Historical Backfill Status:")
+	runningStr := "Idle"
+	if st.Running {
+		runningStr = "Running"
+		if st.CurrentDate != "" {
+			runningStr = fmt.Sprintf("Running (processing: %s)", st.CurrentDate)
+		}
+	}
+	fmt.Printf("  Status:             %s\n", runningStr)
+	lastRun := st.LastRunTime
+	if lastRun == "" {
+		lastRun = "never"
+	}
+	fmt.Printf("  Last Run:           %s\n", lastRun)
+	fmt.Printf("  Last Result:        %s\n", st.LastResult)
+	fmt.Printf("  Records Uploaded:   %d records (%d chunk errors)\n", st.TotalUploaded, st.TotalErrors)
+}
+
 func printMQTTStatus(st ipc.MQTTStatus) {
 	fmt.Println("MQTT Module Status:")
 	fmt.Printf("  Module Enabled:     %v\n", st.Enabled)
@@ -255,6 +310,10 @@ func printMQTTStatus(st ipc.MQTTStatus) {
 	}
 	fmt.Printf("  Status Publishes:   %d sent, %d failed (last: %s)\n", st.StatusPublishCount, st.StatusPublishErrors, lastStatus)
 
+	if st.Backfill != nil {
+		fmt.Printf("  Backfill Status:    %s (last run: %s, %d uploaded)\n", st.Backfill.LastResult, st.Backfill.LastRunTime, st.Backfill.TotalUploaded)
+	}
+
 	if st.LastError != "" {
 		fmt.Printf("  Last Error:         %s\n", st.LastError)
 	} else {
@@ -265,13 +324,14 @@ func printMQTTStatus(st ipc.MQTTStatus) {
 func printUsage() {
 	fmt.Println(`Usage: maps6ctl <command> [options]
 Commands:
-  tui                 Start Terminal UI
-  status              Show system status
-  sensor              Show latest sensor data
-  module              Manage modules (list/enable/disable)
-  mqtt                Show MQTT connection and upload status
-  co2-cal             Trigger CO2 baseline calibration
-  pms-reset           Trigger PMS sensor reset
-  wifi                Manage WiFi (scan/connect)
-  ota                 OTA updates (check/update)`)
+  tui                           Start Terminal UI
+  status                        Show system status
+  sensor                        Show latest sensor data
+  module                        Manage modules (list/enable/disable)
+  mqtt                          Show MQTT connection and upload status
+  backfill [status|trigger...]  Manage historical data backfill
+  co2-cal                       Trigger CO2 baseline calibration
+  pms-reset                     Trigger PMS sensor reset
+  wifi                          Manage WiFi (scan/connect)
+  ota                           OTA updates (check/update)`)
 }

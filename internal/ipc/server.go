@@ -155,6 +155,41 @@ func (s *Server) dispatch(req Request) Response {
 		}
 		return NewSuccessResponse(getter.GetMQTTStatus())
 
+	case MethodTriggerBackfill:
+		mod, ok := s.registry.Get("mqtt")
+		if !ok {
+			return NewErrorResponse("mqtt module not registered")
+		}
+		type backfillTrigger interface {
+			TriggerBackfill(dates []string) error
+		}
+		trigger, ok := mod.(backfillTrigger)
+		if !ok {
+			return NewErrorResponse("mqtt module does not support backfill trigger")
+		}
+		var params TriggerBackfillParams
+		if len(req.Params) > 0 {
+			_ = json.Unmarshal(req.Params, &params)
+		}
+		if err := trigger.TriggerBackfill(params.Dates); err != nil {
+			return NewErrorResponse(err.Error())
+		}
+		return NewSuccessResponse(map[string]string{"status": "backfill started"})
+
+	case MethodGetBackfillStatus:
+		mod, ok := s.registry.Get("mqtt")
+		if !ok {
+			return NewErrorResponse("mqtt module not registered")
+		}
+		type backfillStatusGetter interface {
+			GetBackfillStatus() BackfillStatus
+		}
+		getter, ok := mod.(backfillStatusGetter)
+		if !ok {
+			return NewErrorResponse("mqtt module does not support backfill status query")
+		}
+		return NewSuccessResponse(getter.GetBackfillStatus())
+
 	case MethodGetSystemInfo:
 		mcuFirmware, _ := s.mega.GetFirmwareVersion()
 		netType, ip, ssid := "", "", ""

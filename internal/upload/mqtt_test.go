@@ -116,6 +116,14 @@ TEST_DEV,2026-09-13,12:01:00,26.60,59.80,16,9,24,360,455,82,121.500000,25.000000
 	if records[1].Sensor["pm25_ae"] != 16 {
 		t.Errorf("expected pm25 16, got %v", records[1].Sensor["pm25_ae"])
 	}
+
+	count, err := countCSVDataRows(filePath)
+	if err != nil {
+		t.Fatalf("countCSVDataRows error: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected count 2, got %d", count)
+	}
 }
 
 func TestMQTTModuleLiveServerIntegration(t *testing.T) {

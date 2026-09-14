@@ -17,9 +17,11 @@ const (
 	MethodConnectWiFi      = "connectWiFi"
 	MethodTriggerCO2Cal    = "triggerCO2Cal"
 	MethodTriggerPMSReset  = "triggerPMSReset"
-	MethodTriggerOTACheck  = "triggerOTACheck"
-	MethodTriggerOTAUpdate = "triggerOTAUpdate"
-	MethodGetMQTTStatus    = "getMQTTStatus"
+	MethodTriggerOTACheck   = "triggerOTACheck"
+	MethodTriggerOTAUpdate  = "triggerOTAUpdate"
+	MethodGetMQTTStatus     = "getMQTTStatus"
+	MethodTriggerBackfill   = "triggerBackfill"
+	MethodGetBackfillStatus = "getBackfillStatus"
 )
 
 // Request defines the structure of an IPC request.
@@ -77,8 +79,24 @@ type MQTTStatus struct {
 	LastSensorPublish   string `json:"last_sensor_publish,omitempty"`
 	StatusPublishCount  int64  `json:"status_publish_count"`
 	StatusPublishErrors int64  `json:"status_publish_errors"`
-	LastStatusPublish   string `json:"last_status_publish,omitempty"`
-	LastError           string `json:"last_error,omitempty"`
+	LastStatusPublish   string          `json:"last_status_publish,omitempty"`
+	LastError           string          `json:"last_error,omitempty"`
+	Backfill            *BackfillStatus `json:"backfill,omitempty"`
+}
+
+// BackfillStatus defines historical data backfill status and metrics.
+type BackfillStatus struct {
+	Running       bool   `json:"running"`
+	LastRunTime   string `json:"last_run_time,omitempty"`
+	LastResult    string `json:"last_result,omitempty"`
+	TotalUploaded int64  `json:"total_uploaded"`
+	TotalErrors   int64  `json:"total_errors"`
+	CurrentDate   string `json:"current_date,omitempty"`
+}
+
+// TriggerBackfillParams defines optional params for MethodTriggerBackfill.
+type TriggerBackfillParams struct {
+	Dates []string `json:"dates,omitempty"`
 }
 
 // NewSuccessResponse creates a successful Response with encoded data.

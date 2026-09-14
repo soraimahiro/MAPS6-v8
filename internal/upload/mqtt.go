@@ -3,6 +3,7 @@ package upload
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -62,6 +63,15 @@ type MQTTModule struct {
 	statusPublishCount  int64
 	statusPublishErrors int64
 	lastStatusPublish   time.Time
+
+	// Backfill telemetry
+	backfillMu          sync.RWMutex
+	backfillRunning     bool
+	lastBackfillTime    time.Time
+	lastBackfillResult  string
+	backfillUploaded    int64
+	backfillErrors      int64
+	backfillCurrentDate string
 }
 
 // NewMQTTModule creates a new MQTTModule.
@@ -183,9 +193,10 @@ func (m *MQTTModule) Start(ctx context.Context) error {
 
 		ch := m.bus.Subscribe("mqtt_upload", 10)
 
-		m.wg.Add(2)
+		m.wg.Add(3)
 		go m.publishSensorTask(subCtx, ch)
 		go m.publishStatusTask(subCtx)
+		go m.backfillScheduleTask(subCtx)
 
 		// Attempt initial connection
 		token := client.Connect()
@@ -319,6 +330,8 @@ func (m *MQTTModule) GetMQTTStatus() ipc.MQTTStatus {
 		}
 	}
 
+	bf := m.GetBackfillStatus()
+
 	return ipc.MQTTStatus{
 		Enabled:             m.cfg.Modules.MQTT,
 		Running:             running,
@@ -337,6 +350,7 @@ func (m *MQTTModule) GetMQTTStatus() ipc.MQTTStatus {
 		StatusPublishErrors: stErrors,
 		LastStatusPublish:   stLast,
 		LastError:           lastErr,
+		Backfill:            &bf,
 	}
 }
 
@@ -681,6 +695,111 @@ func (m *MQTTModule) handleCommand(raw []byte) {
 	}
 }
 
+func (m *MQTTModule) getBasicAuthHeader() string {
+	user := m.cfg.Upload.MQTT.Username
+	pass := m.cfg.Upload.MQTT.Password
+	if user == "" {
+		user = "maps"
+	}
+	if pass == "" {
+		pass = "raspberry"
+	}
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+}
+
+// GetBackfillStatus returns current backfill metrics and status.
+func (m *MQTTModule) GetBackfillStatus() ipc.BackfillStatus {
+	m.backfillMu.RLock()
+	defer m.backfillMu.RUnlock()
+
+	var lastTime string
+	if !m.lastBackfillTime.IsZero() {
+		lastTime = m.lastBackfillTime.Local().Format("2006-01-02 15:04:05")
+	}
+	res := m.lastBackfillResult
+	if res == "" {
+		res = "idle"
+	}
+
+	return ipc.BackfillStatus{
+		Running:       m.backfillRunning,
+		LastRunTime:   lastTime,
+		LastResult:    res,
+		TotalUploaded: m.backfillUploaded,
+		TotalErrors:   m.backfillErrors,
+		CurrentDate:   m.backfillCurrentDate,
+	}
+}
+
+// TriggerBackfill triggers a backfill on-demand in a background goroutine.
+func (m *MQTTModule) TriggerBackfill(dates []string) error {
+	m.backfillMu.RLock()
+	running := m.backfillRunning
+	m.backfillMu.RUnlock()
+	if running {
+		return fmt.Errorf("backfill task is already in progress")
+	}
+	go m.runBackfill(dates)
+	return nil
+}
+
+func (m *MQTTModule) setBackfillResult(res string) {
+	m.backfillMu.Lock()
+	m.lastBackfillResult = res
+	m.backfillMu.Unlock()
+}
+
+func (m *MQTTModule) backfillScheduleTask(ctx context.Context) {
+	defer m.wg.Done()
+
+	// Initial check 10 seconds after daemon starts
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(10 * time.Second):
+		m.checkAndRunBackfill()
+	}
+
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if m.IsConnected() {
+				m.checkAndRunBackfill()
+			}
+		}
+	}
+}
+
+func countCSVDataRows(filePath string) (int, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	if _, err := reader.Read(); err != nil {
+		return 0, err
+	}
+	count := 0
+	for {
+		_, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			continue
+		}
+		count++
+	}
+	return count, nil
+}
+
 // checkAndRunBackfill runs initial backfill comparison against central server.
 func (m *MQTTModule) checkAndRunBackfill() {
 	serverURL := m.cfg.Upload.MQTT.GetServerURL()
@@ -690,6 +809,13 @@ func (m *MQTTModule) checkAndRunBackfill() {
 	m.runBackfill(nil)
 }
 
+type serverDateSummaryItem struct {
+	Date    string `json:"date"`
+	Count   int    `json:"count"`
+	MinTime string `json:"min_time"`
+	MaxTime string `json:"max_time"`
+}
+
 // runBackfill uploads missing CSV historical records to Central Server HTTP API.
 func (m *MQTTModule) runBackfill(specificDates []string) {
 	serverURL := m.cfg.Upload.MQTT.GetServerURL()
@@ -697,86 +823,189 @@ func (m *MQTTModule) runBackfill(specificDates []string) {
 		return
 	}
 
+	m.backfillMu.Lock()
+	if m.backfillRunning {
+		m.backfillMu.Unlock()
+		slog.Warn("mqtt backfill already running, skipping")
+		return
+	}
+	m.backfillRunning = true
+	m.backfillCurrentDate = "querying server"
+	m.backfillMu.Unlock()
+
+	defer func() {
+		m.backfillMu.Lock()
+		m.backfillRunning = false
+		m.backfillCurrentDate = ""
+		m.lastBackfillTime = time.Now()
+		m.backfillMu.Unlock()
+	}()
+
 	storagePath := m.cfg.Storage.Local.Path
 	if storagePath == "" {
 		storagePath = "/home/pi/maps6/data"
 	}
 
-	datesToUpload := specificDates
-	if len(datesToUpload) == 0 {
-		// Query server's available dates
-		datesURL := fmt.Sprintf("%s/api/v1/devices/%s/dates", serverURL, m.deviceID)
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Get(datesURL)
-		if err != nil {
-			slog.Debug("backfill date query failed", "error", err)
-			return
-		}
-		defer resp.Body.Close()
+	// 1. Query server for stored date summaries
+	summaryURL := fmt.Sprintf("%s/api/v1/devices/%s/date-summary", serverURL, m.deviceID)
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", summaryURL, nil)
+	if err != nil {
+		m.setBackfillResult("failed to create summary request: " + err.Error())
+		return
+	}
+	req.Header.Set("Authorization", m.getBasicAuthHeader())
 
-		var dateRes struct {
-			Success bool     `json:"success"`
-			Dates   []string `json:"dates"`
+	serverMap := make(map[string]serverDateSummaryItem)
+	resp, err := client.Do(req)
+	if err == nil && resp.StatusCode == 200 {
+		var res struct {
+			Success   bool                    `json:"success"`
+			Summaries []serverDateSummaryItem `json:"summaries"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&dateRes); err != nil {
-			return
-		}
-
-		serverDates := make(map[string]bool)
-		for _, d := range dateRes.Dates {
-			serverDates[d] = true
-		}
-
-		// Scan local CSV files
-		entries, err := os.ReadDir(storagePath)
-		if err != nil {
-			return
-		}
-
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".csv") {
-				continue
+		if err := json.NewDecoder(resp.Body).Decode(&res); err == nil {
+			for _, s := range res.Summaries {
+				serverMap[s.Date] = s
 			}
-			date := strings.TrimSuffix(e.Name(), ".csv")
-			if !serverDates[date] {
-				datesToUpload = append(datesToUpload, date)
+		}
+		resp.Body.Close()
+	} else {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		// Fallback: try querying /dates if /date-summary is not available
+		datesURL := fmt.Sprintf("%s/api/v1/devices/%s/dates", serverURL, m.deviceID)
+		if dReq, err := http.NewRequest("GET", datesURL, nil); err == nil {
+			dReq.Header.Set("Authorization", m.getBasicAuthHeader())
+			if dResp, err := client.Do(dReq); err == nil && dResp.StatusCode == 200 {
+				var dRes struct {
+					Success bool     `json:"success"`
+					Dates   []string `json:"dates"`
+				}
+				if err := json.NewDecoder(dResp.Body).Decode(&dRes); err == nil {
+					for _, d := range dRes.Dates {
+						serverMap[d] = serverDateSummaryItem{Date: d, Count: 999999}
+					}
+				}
+				dResp.Body.Close()
 			}
 		}
 	}
 
-	for _, date := range datesToUpload {
-		filePath := filepath.Join(storagePath, fmt.Sprintf("%s.csv", date))
-		records, err := parseCSVForBackfill(filePath, date)
+	// 2. Scan local CSV files
+	entries, err := os.ReadDir(storagePath)
+	if err != nil {
+		m.setBackfillResult("failed to read local storage directory: " + err.Error())
+		return
+	}
+
+	specificSet := make(map[string]bool)
+	for _, d := range specificDates {
+		specificSet[d] = true
+	}
+
+	type dateTarget struct {
+		date       string
+		localCount int
+	}
+	var datesToUpload []dateTarget
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".csv") {
+			continue
+		}
+		date := strings.TrimSuffix(e.Name(), ".csv")
+		if len(specificSet) > 0 && !specificSet[date] {
+			continue
+		}
+
+		filePath := filepath.Join(storagePath, e.Name())
+		localCount, err := countCSVDataRows(filePath)
+		if err != nil || localCount == 0 {
+			continue
+		}
+
+		if serverItem, exists := serverMap[date]; exists {
+			if localCount > serverItem.Count {
+				datesToUpload = append(datesToUpload, dateTarget{date: date, localCount: localCount})
+				slog.Info("backfill detected missing rows", "date", date, "server", serverItem.Count, "local", localCount)
+			}
+		} else {
+			datesToUpload = append(datesToUpload, dateTarget{date: date, localCount: localCount})
+			slog.Info("backfill detected missing date", "date", date, "localRows", localCount)
+		}
+	}
+
+	if len(datesToUpload) == 0 {
+		m.setBackfillResult("all records in sync")
+		slog.Info("mqtt backfill check complete: all records in sync")
+		return
+	}
+
+	// 3. Upload chunked records (500 per chunk, 200ms rate limit)
+	uploadURL := fmt.Sprintf("%s/api/v1/devices/%s/backfill", serverURL, m.deviceID)
+	uploadClient := &http.Client{Timeout: 30 * time.Second}
+	totalUploaded := 0
+	totalErrors := 0
+
+	for _, target := range datesToUpload {
+		m.backfillMu.Lock()
+		m.backfillCurrentDate = target.date
+		m.backfillMu.Unlock()
+
+		filePath := filepath.Join(storagePath, fmt.Sprintf("%s.csv", target.date))
+		records, err := parseCSVForBackfill(filePath, target.date)
 		if err != nil || len(records) == 0 {
 			continue
 		}
 
-		payload := map[string]interface{}{
-			"date":    date,
-			"records": records,
-		}
-		payloadBytes, err := json.Marshal(payload)
-		if err != nil {
-			continue
-		}
+		const chunkSize = 500
+		for i := 0; i < len(records); i += chunkSize {
+			end := i + chunkSize
+			if end > len(records) {
+				end = len(records)
+			}
+			chunk := records[i:end]
 
-		uploadURL := fmt.Sprintf("%s/api/v1/devices/%s/backfill", serverURL, m.deviceID)
-		req, err := http.NewRequest("POST", uploadURL, bytes.NewBuffer(payloadBytes))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
+			payload := map[string]interface{}{
+				"date":    target.date,
+				"records": chunk,
+			}
+			payloadBytes, err := json.Marshal(payload)
+			if err != nil {
+				continue
+			}
 
-		client := &http.Client{Timeout: 30 * time.Second}
-		uploadResp, err := client.Do(req)
-		if err == nil {
-			uploadResp.Body.Close()
-			slog.Info("mqtt historical backfill uploaded", "device", m.deviceID, "date", date, "records", len(records))
-		}
+			postReq, err := http.NewRequest("POST", uploadURL, bytes.NewBuffer(payloadBytes))
+			if err != nil {
+				continue
+			}
+			postReq.Header.Set("Content-Type", "application/json")
+			postReq.Header.Set("Authorization", m.getBasicAuthHeader())
 
-		// Rate limit backfill requests
-		time.Sleep(500 * time.Millisecond)
+			postResp, err := uploadClient.Do(postReq)
+			if err != nil {
+				totalErrors++
+				m.backfillMu.Lock()
+				m.backfillErrors++
+				m.backfillMu.Unlock()
+				slog.Error("mqtt backfill chunk failed", "date", target.date, "error", err)
+			} else {
+				postResp.Body.Close()
+				totalUploaded += len(chunk)
+				m.backfillMu.Lock()
+				m.backfillUploaded += int64(len(chunk))
+				m.backfillMu.Unlock()
+			}
+
+			// Rate limit between chunks
+			time.Sleep(200 * time.Millisecond)
+		}
 	}
+
+	resStr := fmt.Sprintf("completed: %d records uploaded, %d chunk errors", totalUploaded, totalErrors)
+	m.setBackfillResult(resStr)
+	slog.Info("mqtt backfill job completed", "result", resStr)
 }
 
 type backfillRecord struct {
